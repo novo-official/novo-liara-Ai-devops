@@ -1,0 +1,137 @@
+{
+  "_simulated": true,
+  "demo-shop": {
+    "applets": [
+      {
+        "id": "sim-shop-a1",
+        "name": "demo-shop-7d9f-a1",
+        "timestamp": "$ago:172800",
+        "state": "running",
+        "reason": "",
+        "release": {
+          "releaseID": "sim-rel-shop-3",
+          "tag": "v3"
+        }
+      },
+      {
+        "id": "sim-shop-a2",
+        "name": "demo-shop-7d9f-a2",
+        "timestamp": "$ago:172700",
+        "state": "running",
+        "reason": "",
+        "release": {
+          "releaseID": "sim-rel-shop-3",
+          "tag": "v3"
+        }
+      }
+    ]
+  },
+  "demo-api": {
+    "applets": [
+      {
+        "id": "sim-api-a1",
+        "name": "demo-api-55c1-a1",
+        "timestamp": "$ago:95",
+        "state": "restarting",
+        "reason": "process exited with code 1 (simulated)",
+        "release": {
+          "releaseID": "sim-rel-api-5",
+          "tag": "v5"
+        }
+      }
+    ]
+  },
+  "demo-worker": {
+    "applets": []
+  },
+  "demo-stale": {
+    "applets": [
+      {
+        "id": "sim-stale-a1",
+        "name": "demo-stale-1c2d-a1",
+        "timestamp": "$ago:600000",
+        "state": "running",
+        "reason": "",
+        "release": {
+          "releaseID": "sim-rel-stale-1",
+          "tag": "v1"
+        }
+      }
+    ]
+  },
+  "demo-oom": {
+    "applets": [
+      {
+        "id": "sim-oom-a1",
+        "name": "demo-oom-9a1b-a1",
+        "timestamp": "$ago:100",
+        "state": "restarting",
+        "reason": "OOMKilled (exit code 137) (simulated)",
+        "release": {
+          "releaseID": "sim-rel-sim-oom-a1",
+          "tag": "v2"
+        }
+      }
+    ]
+  },
+  "demo-cpu": {
+    "applets": [
+      {
+        "id": "sim-cpu-a1",
+        "name": "demo-cpu-4e5f-a1",
+        "timestamp": "$ago:259200",
+        "state": "running",
+        "reason": "",
+        "release": {
+          "releaseID": "sim-rel-sim-cpu-a1",
+          "tag": "v4"
+        }
+      }
+    ]
+  },
+  "demo-badrelease": {
+    "applets": [
+      {
+        "id": "sim-br-a1",
+        "name": "demo-badrelease-2c3d-a1",
+        "timestamp": "$ago:345600",
+        "state": "running",
+        "reason": "",
+        "release": {
+          "releaseID": "sim-rel-sim-br-a1",
+          "tag": "v6"
+        }
+      }
+    ]
+  },
+  "demo-http500": {
+    "applets": [
+      {
+        "id": "sim-h5-a1",
+        "name": "demo-http500-7f8a-a1",
+        "timestamp": "$ago:172800",
+        "state": "running",
+        "reason": "",
+        "release": {
+          "releaseID": "sim-rel-sim-h5-a1",
+          "tag": "v3"
+        }
+      }
+    ]
+  },
+  "demo-conflict": {
+    "applets": [
+      {
+        "id": "sim-cf-a1",
+        "name": "demo-conflict-5d6e-a1",
+        "timestamp": "$ago:864000",
+        "state": "running",
+        "reason": "",
+        "release": {
+          "releaseID": "sim-rel-sim-cf-a1",
+          "tag": "v9"
+        }
+      }
+    ]
+  }
+}

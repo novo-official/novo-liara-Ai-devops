@@ -1,0 +1,149 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`contract regression: projections of canonical payloads are stable > projection snapshot 1`] = `
+{
+  "app": {
+    "createdAt": "2026-01-02T03:04:05.000Z",
+    "defaultSubdomain": true,
+    "envKeys": [
+      {
+        "encrypted": false,
+        "key": "DATABASE_URL",
+      },
+    ],
+    "fixedIpStatus": "disabled",
+    "instanceId": "1",
+    "isDeployed": true,
+    "name": "shop-api",
+    "networkId": null,
+    "planId": "p1",
+    "platform": "node",
+    "readOnlyRootFilesystem": false,
+    "scale": 1,
+    "status": "RUNNING",
+    "zeroDowntime": false,
+  },
+  "applets": {
+    "applets": {
+      "items": [
+        {
+          "id": "a1",
+          "name": "shop-api-1",
+          "reason": null,
+          "releaseTag": "v1",
+          "since": "2026-01-02T03:04:05.000Z",
+          "state": "running",
+        },
+      ],
+      "skipped": 0,
+    },
+  },
+  "apps": {
+    "projects": {
+      "items": [
+        {
+          "createdAt": "2026-01-02T03:04:05.000Z",
+          "isDeployed": true,
+          "name": "shop-api",
+          "planId": "p1",
+          "platform": "node",
+          "scale": 1,
+          "status": "RUNNING",
+        },
+        {
+          "createdAt": "2026-01-02T03:04:05.000Z",
+          "isDeployed": true,
+          "name": "shop-web",
+          "planId": "p1",
+          "platform": "next",
+          "scale": 1,
+          "status": "RUNNING",
+        },
+        {
+          "createdAt": "2026-01-02T03:04:05.000Z",
+          "isDeployed": true,
+          "name": "secret-internal-app",
+          "planId": "p1",
+          "platform": "node",
+          "scale": 1,
+          "status": "RUNNING",
+        },
+      ],
+      "skipped": 1,
+    },
+  },
+  "events": {
+    "rows": [
+      {
+        "text": "Applet started",
+        "time": "2026-01-02T03:04:05.000Z",
+        "timeInferred": true,
+      },
+    ],
+    "truncated": false,
+  },
+  "logsV1": [
+    {
+      "message": "hello",
+      "stream": "stdout",
+      "time": "2026-01-02T03:04:05.000Z",
+    },
+  ],
+  "logsV2": [
+    {
+      "message": "line",
+      "stream": null,
+      "time": "2026-01-02T03:04:05.000Z",
+    },
+  ],
+  "metrics": {
+    "droppedPoints": 0,
+    "droppedSeries": 0,
+    "end": 1767323100,
+    "rawSeriesCount": 1,
+    "series": [
+      {
+        "applet": "shop-api-1",
+        "gapsAfter": [],
+        "lastObservation": {
+          "t": 1767323100,
+          "v": 0.15,
+        },
+        "points": [
+          {
+            "t": 1767323040,
+            "v": 0.12,
+          },
+          {
+            "t": 1767323100,
+            "v": 0.15,
+          },
+        ],
+        "stepSeconds": 60,
+      },
+    ],
+  },
+  "releases": {
+    "currentRelease": "v1",
+    "releases": {
+      "items": [
+        {
+          "branch": "main",
+          "commit": "a1b2c3d4e5f6",
+          "createdAt": "2026-01-02T03:04:05.000Z",
+          "finishedAt": "2026-01-02T03:05:05.000Z",
+          "id": "r1",
+          "message": "init",
+          "port": 3000,
+          "sourceAvailable": true,
+          "state": "READY",
+          "tag": "v1",
+          "type": "source",
+        },
+      ],
+      "skipped": 0,
+    },
+    "total": 1,
+  },
+}
+`;

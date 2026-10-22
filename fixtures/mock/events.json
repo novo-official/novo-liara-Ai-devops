@@ -1,0 +1,170 @@
+{
+  "_simulated": true,
+  "demo-shop": {
+    "data": [
+      {
+        "metaData": {
+          "kind": "sim"
+        },
+        "values": [
+          [
+            "$agoNs:172800",
+            "Release v3 deployed (simulated)"
+          ],
+          [
+            "$agoNs:172790",
+            "Applet started (simulated)"
+          ]
+        ]
+      }
+    ]
+  },
+  "demo-api": {
+    "data": [
+      {
+        "metaData": {
+          "kind": "sim"
+        },
+        "values": [
+          [
+            "$agoNs:896",
+            "Applet exited with code 1 (simulated)"
+          ],
+          [
+            "$agoNs:886",
+            "Applet restarted (simulated)"
+          ],
+          [
+            "$agoNs:646",
+            "Applet exited with code 1 (simulated)"
+          ],
+          [
+            "$agoNs:636",
+            "Applet restarted (simulated)"
+          ],
+          [
+            "$agoNs:396",
+            "Applet exited with code 1 (simulated)"
+          ],
+          [
+            "$agoNs:386",
+            "Applet restarted (simulated)"
+          ],
+          [
+            "$agoNs:146",
+            "Applet exited with code 1 (simulated)"
+          ],
+          [
+            "$agoNs:136",
+            "Applet restarted (simulated)"
+          ]
+        ]
+      }
+    ]
+  },
+  "demo-worker": {
+    "data": []
+  },
+  "demo-stale": {
+    "data": [
+      {
+        "metaData": {
+          "kind": "sim"
+        },
+        "values": [
+          [
+            "$agoNs:172800",
+            "Release v1 deployed (simulated)"
+          ]
+        ]
+      }
+    ]
+  },
+  "demo-oom": {
+    "data": [
+      {
+        "metaData": {
+          "kind": "sim"
+        },
+        "values": [
+          [
+            "$agoNs:840",
+            "Applet OOMKilled (exit code 137) (simulated)"
+          ],
+          [
+            "$agoNs:600",
+            "Applet OOMKilled (exit code 137) (simulated)"
+          ],
+          [
+            "$agoNs:590",
+            "Applet restarted (simulated)"
+          ],
+          [
+            "$agoNs:360",
+            "Applet OOMKilled (exit code 137) (simulated)"
+          ],
+          [
+            "$agoNs:350",
+            "Applet restarted (simulated)"
+          ],
+          [
+            "$agoNs:120",
+            "Applet OOMKilled (exit code 137) (simulated)"
+          ],
+          [
+            "$agoNs:110",
+            "Applet restarted (simulated)"
+          ]
+        ]
+      }
+    ]
+  },
+  "demo-cpu": {
+    "data": []
+  },
+  "demo-badrelease": {
+    "data": [
+      {
+        "metaData": {
+          "kind": "sim"
+        },
+        "values": [
+          [
+            "$agoNs:1700",
+            "Release v7 failed during build (simulated)"
+          ],
+          [
+            "$agoNs:345600",
+            "Release v6 deployed (simulated)"
+          ]
+        ]
+      }
+    ]
+  },
+  "demo-http500": {
+    "data": []
+  },
+  "demo-conflict": {
+    "data": [
+      {
+        "metaData": {
+          "kind": "sim"
+        },
+        "values": [
+          [
+            "$agoNs:840",
+            "Applet exited with code 1 (simulated)"
+          ],
+          [
+            "$agoNs:560",
+            "Applet exited with code 1 (simulated)"
+          ],
+          [
+            "$agoNs:280",
+            "Applet exited with code 1 (simulated)"
+          ]
+        ]
+      }
+    ]
+  }
+}

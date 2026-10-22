@@ -1,0 +1,300 @@
+{
+  "_simulated": true,
+  "demo-shop": {
+    "project": {
+      "_id": "sim-demo-shop",
+      "project_id": "demo-shop",
+      "type": "node",
+      "status": "running",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": true,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "NODE_ENV",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-node_env"
+        },
+        {
+          "key": "PORT",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-port"
+        },
+        {
+          "key": "PAYMENT_API_KEY",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-payment_api_key"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:3456000",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-api": {
+    "project": {
+      "_id": "sim-demo-api",
+      "project_id": "demo-api",
+      "type": "python",
+      "status": "restarting",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": false,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "FLASK_ENV",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-flask_env"
+        },
+        {
+          "key": "DATABASE_URL",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-database_url"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:1036800",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-worker": {
+    "project": {
+      "_id": "sim-demo-worker",
+      "project_id": "demo-worker",
+      "type": "go",
+      "status": "stopped",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": false,
+      "scale": 0,
+      "envs": [
+        {
+          "key": "QUEUE_NAME",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-queue_name"
+        }
+      ],
+      "planID": "sim-plan-b",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:7776000",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-stale": {
+    "project": {
+      "_id": "sim-demo-stale",
+      "project_id": "demo-stale",
+      "type": "node",
+      "status": "running",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": true,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "NODE_ENV",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-node_env"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:3456000",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-oom": {
+    "project": {
+      "_id": "sim-demo-oom",
+      "project_id": "demo-oom",
+      "type": "python",
+      "status": "restarting",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": false,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "WORKER_CONCURRENCY",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-worker_concurrency"
+        },
+        {
+          "key": "BATCH_SIZE",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-batch_size"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:1728000",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-cpu": {
+    "project": {
+      "_id": "sim-demo-cpu",
+      "project_id": "demo-cpu",
+      "type": "node",
+      "status": "running",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": false,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "NODE_ENV",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-node_env"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:2592000",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-badrelease": {
+    "project": {
+      "_id": "sim-demo-badrelease",
+      "project_id": "demo-badrelease",
+      "type": "node",
+      "status": "running",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": false,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "NODE_ENV",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-node_env"
+        },
+        {
+          "key": "PORT",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-port"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:5184000",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-http500": {
+    "project": {
+      "_id": "sim-demo-http500",
+      "project_id": "demo-http500",
+      "type": "node",
+      "status": "running",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": false,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "NODE_ENV",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-node_env"
+        },
+        {
+          "key": "SESSION_SECRET",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-session_secret"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:1209600",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  },
+  "demo-conflict": {
+    "project": {
+      "_id": "sim-demo-conflict",
+      "project_id": "demo-conflict",
+      "type": "python",
+      "status": "running",
+      "defaultSubdomain": true,
+      "readOnlyRootFilesystem": false,
+      "zeroDowntime": false,
+      "scale": 1,
+      "envs": [
+        {
+          "key": "DATABASE_URL",
+          "value": "SIMULATED-NOT-A-REAL-VALUE",
+          "encrypted": false,
+          "_id": "sim-env-database_url"
+        }
+      ],
+      "planID": "sim-plan-a",
+      "fixedIPStatus": "disabled",
+      "created_at": "$ago:3456000",
+      "hourlyPrice": 0,
+      "isDeployed": true,
+      "node": {
+        "_id": "sim-node",
+        "IP": "192.0.2.10"
+      }
+    }
+  }
+}

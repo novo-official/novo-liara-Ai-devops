@@ -1,0 +1,95 @@
+{
+  "_simulated": true,
+  "projects": [
+    {
+      "_id": "sim-demo-shop",
+      "project_id": "demo-shop",
+      "type": "node",
+      "status": "running",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:3456000",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-api",
+      "project_id": "demo-api",
+      "type": "python",
+      "status": "restarting",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:1036800",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-worker",
+      "project_id": "demo-worker",
+      "type": "go",
+      "status": "stopped",
+      "scale": 0,
+      "planID": "sim-plan-b",
+      "created_at": "$ago:7776000",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-stale",
+      "project_id": "demo-stale",
+      "type": "node",
+      "status": "running",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:604800",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-oom",
+      "project_id": "demo-oom",
+      "type": "python",
+      "status": "restarting",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:1728000",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-cpu",
+      "project_id": "demo-cpu",
+      "type": "node",
+      "status": "running",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:2592000",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-badrelease",
+      "project_id": "demo-badrelease",
+      "type": "node",
+      "status": "running",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:5184000",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-http500",
+      "project_id": "demo-http500",
+      "type": "node",
+      "status": "running",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:1209600",
+      "isDeployed": true
+    },
+    {
+      "_id": "sim-demo-conflict",
+      "project_id": "demo-conflict",
+      "type": "python",
+      "status": "running",
+      "scale": 1,
+      "planID": "sim-plan-a",
+      "created_at": "$ago:3456000",
+      "isDeployed": true
+    }
+  ]
+}

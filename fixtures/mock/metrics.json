@@ -1,0 +1,127 @@
+{
+  "_simulated": true,
+  "demo-shop": {
+    "cpu": {
+      "base": 0.18,
+      "amp": 0.05,
+      "period": 900,
+      "trend": 0.0
+    },
+    "memory": {
+      "base": 210,
+      "amp": 6,
+      "period": 1800,
+      "trend": 0.004
+    }
+  },
+  "demo-api": {
+    "cpu": {
+      "base": 0.55,
+      "amp": 0.35,
+      "period": 540,
+      "trend": 0.0
+    },
+    "memory": {
+      "base": 120,
+      "amp": 40,
+      "period": 900,
+      "trend": 0.0
+    }
+  },
+  "demo-worker": {
+    "cpu": null,
+    "memory": null
+  },
+  "demo-stale": {
+    "cpu": {
+      "base": 0.2,
+      "amp": 0.1,
+      "period": 600,
+      "trend": 0.0,
+      "gaps": [
+        [
+          3000,
+          2700
+        ]
+      ],
+      "endAgo": 2400
+    },
+    "memory": {
+      "base": 150,
+      "amp": 5,
+      "period": 900,
+      "trend": 0.0,
+      "endAgo": 2400
+    }
+  },
+  "demo-oom": {
+    "cpu": {
+      "base": 0.4,
+      "amp": 0.1,
+      "period": 420,
+      "trend": 0.0
+    },
+    "memory": {
+      "base": 100,
+      "amp": 3,
+      "period": 900,
+      "trend": 2.0
+    }
+  },
+  "demo-cpu": {
+    "cpu": {
+      "base": 0.96,
+      "amp": 0.02,
+      "period": 400,
+      "trend": 0.0
+    },
+    "memory": {
+      "base": 180,
+      "amp": 3,
+      "period": 900,
+      "trend": 0.0
+    }
+  },
+  "demo-badrelease": {
+    "cpu": {
+      "base": 0.15,
+      "amp": 0.03,
+      "period": 600,
+      "trend": 0.0
+    },
+    "memory": {
+      "base": 150,
+      "amp": 4,
+      "period": 900,
+      "trend": 0.0
+    }
+  },
+  "demo-http500": {
+    "cpu": {
+      "base": 0.2,
+      "amp": 0.05,
+      "period": 600,
+      "trend": 0.0
+    },
+    "memory": {
+      "base": 160,
+      "amp": 4,
+      "period": 900,
+      "trend": 0.0
+    }
+  },
+  "demo-conflict": {
+    "cpu": {
+      "base": 0.2,
+      "amp": 0.05,
+      "period": 600,
+      "trend": 0.0
+    },
+    "memory": {
+      "base": 140,
+      "amp": 4,
+      "period": 900,
+      "trend": 0.0
+    }
+  }
+}

@@ -1,0 +1,399 @@
+{
+  "_simulated": true,
+  "demo-shop": {
+    "total": 3,
+    "currentRelease": "v3",
+    "readyReleasesCount": 3,
+    "platform": "node",
+    "releases": [
+      {
+        "_id": "sim-rel-shop-3",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "add cart badge",
+          "commit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+          "committedAt": "$ago:172860",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:172700",
+        "createdAt": "$ago:172800",
+        "tag": "v3",
+        "sourceAvailable": true
+      },
+      {
+        "_id": "sim-rel-shop-2",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "fix checkout rounding",
+          "commit": "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+          "committedAt": "$ago:604860",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:604700",
+        "createdAt": "$ago:604800",
+        "tag": "v2",
+        "sourceAvailable": true
+      },
+      {
+        "_id": "sim-rel-shop-1",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "initial release",
+          "commit": "c3d4e5f60718293a4b5c6d7e8f90123456789012",
+          "committedAt": "$ago:2592060",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:2591900",
+        "createdAt": "$ago:2592000",
+        "tag": "v1",
+        "sourceAvailable": true
+      }
+    ]
+  },
+  "demo-api": {
+    "total": 2,
+    "currentRelease": "v5",
+    "readyReleasesCount": 1,
+    "platform": "python",
+    "releases": [
+      {
+        "_id": "sim-rel-api-5",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 8000,
+        "gitInfo": {
+          "branch": "hotfix",
+          "message": "switch db driver",
+          "commit": "d4e5f60718293a4b5c6d7e8f9012345678901234",
+          "committedAt": "$ago:11060",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:10900",
+        "createdAt": "$ago:11000",
+        "tag": "v5",
+        "sourceAvailable": true
+      },
+      {
+        "_id": "sim-rel-api-4",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "FAILED",
+        "port": 8000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "bump deps",
+          "commit": "e5f60718293a4b5c6d7e8f901234567890123456",
+          "committedAt": "$ago:90060",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": null,
+        "createdAt": "$ago:90000",
+        "tag": "v4",
+        "sourceAvailable": true
+      }
+    ]
+  },
+  "demo-worker": {
+    "total": 0,
+    "currentRelease": null,
+    "readyReleasesCount": 0,
+    "platform": "go",
+    "releases": []
+  },
+  "demo-stale": {
+    "total": 1,
+    "currentRelease": "v1",
+    "readyReleasesCount": 1,
+    "platform": "node",
+    "releases": [
+      {
+        "_id": "sim-rel-stale-1",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "initial release",
+          "commit": "c3d4e5f60718293a4b5c6d7e8f90123456789012",
+          "committedAt": "$ago:2592060",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:2591900",
+        "createdAt": "$ago:2592000",
+        "tag": "v1",
+        "sourceAvailable": true
+      }
+    ]
+  },
+  "demo-oom": {
+    "total": 1,
+    "currentRelease": "v2",
+    "readyReleasesCount": 1,
+    "platform": "python",
+    "releases": [
+      {
+        "_id": "sim-rel-oom-2",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 8000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "bigger batches",
+          "commit": "a9b8c7d6e5f401928374655647382910abcdef12",
+          "committedAt": "$ago:432060",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:431910",
+        "createdAt": "$ago:432000",
+        "tag": "v2",
+        "sourceAvailable": true
+      }
+    ]
+  },
+  "demo-cpu": {
+    "total": 1,
+    "currentRelease": "v4",
+    "readyReleasesCount": 1,
+    "platform": "node",
+    "releases": [
+      {
+        "_id": "sim-rel-cpu-4",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "report generator",
+          "commit": "1a2b3c4d5e6f708192a3b4c5d6e7f80910111213",
+          "committedAt": "$ago:259260",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:259120",
+        "createdAt": "$ago:259200",
+        "tag": "v4",
+        "sourceAvailable": true
+      }
+    ]
+  },
+  "demo-badrelease": {
+    "total": 3,
+    "currentRelease": "v6",
+    "readyReleasesCount": 2,
+    "platform": "node",
+    "releases": [
+      {
+        "_id": "sim-rel-br-7",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "FAILED",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "feature/upgrade",
+          "message": "upgrade framework",
+          "commit": "fedcba9876543210fedcba9876543210fedcba98",
+          "committedAt": "$ago:1860",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:1700",
+        "createdAt": "$ago:1800",
+        "tag": "v7",
+        "sourceAvailable": true
+      },
+      {
+        "_id": "sim-rel-br-6",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "stable",
+          "commit": "0f1e2d3c4b5a69788796a5b4c3d2e1f001122334",
+          "committedAt": "$ago:345660",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:345530",
+        "createdAt": "$ago:345600",
+        "tag": "v6",
+        "sourceAvailable": true
+      },
+      {
+        "_id": "sim-rel-br-5",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "older",
+          "commit": "11223344556677889900aabbccddeeff00112233",
+          "committedAt": "$ago:777660",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:777530",
+        "createdAt": "$ago:777600",
+        "tag": "v5",
+        "sourceAvailable": true
+      }
+    ]
+  },
+  "demo-http500": {
+    "total": 1,
+    "currentRelease": "v3",
+    "readyReleasesCount": 1,
+    "platform": "node",
+    "releases": [
+      {
+        "_id": "sim-rel-h5-3",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 3000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "cart rewrite",
+          "commit": "9988776655443322110099887766554433221100",
+          "committedAt": "$ago:172860",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:172740",
+        "createdAt": "$ago:172800",
+        "tag": "v3",
+        "sourceAvailable": true
+      }
+    ]
+  },
+  "demo-conflict": {
+    "total": 1,
+    "currentRelease": "v9",
+    "readyReleasesCount": 1,
+    "platform": "python",
+    "releases": [
+      {
+        "_id": "sim-rel-cf-9",
+        "type": "source",
+        "imageName": "sim/registry/image",
+        "projectType": "x",
+        "state": "READY",
+        "port": 8000,
+        "gitInfo": {
+          "branch": "main",
+          "message": "steady",
+          "commit": "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+          "committedAt": "$ago:864060",
+          "remote": "https://example.invalid/repo.git",
+          "author": {
+            "email": "dev@example.invalid",
+            "name": "Simulated Dev"
+          },
+          "tags": []
+        },
+        "client": "cli",
+        "finishedAt": "$ago:863940",
+        "createdAt": "$ago:864000",
+        "tag": "v9",
+        "sourceAvailable": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "liara-agent-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal deterministic Next.js app used for the first controlled Liara deployment (no database, no secrets, no workers, no storage).",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "16.4.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "engines": {
+    "node": ">=20.9"
+  }
+}
