@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { assertStepAuthorized, type LiveGate } from "./authorize";
 import { CreateAppRequestSchema, CreateReleaseRequestSchema, NON_REPO_GIT_INFO, type LiveWriteTransport, type WriteErrorCode } from "./contract";
+import type { ResponseShape } from "./response-shape";
 import type { LiveReader } from "./reader";
 import type { LiveStore } from "./store";
 import { ladderVerdict } from "@/lib/live-ladder";
@@ -134,10 +135,11 @@ export class LiaraDeploymentExecutor {
     await this.d.audit(null, "operation_failed", { operationId: op.id, step, code, appConfirmed: saved.remote.appConfirmed });
     return saved;
   }
-  private async needsReview(op: LiveOperationRecord, from: LiveState, step: StepName, code: string, recovery: string[]): Promise<LiveOperationRecord> {
+  private async needsReview(op: LiveOperationRecord, from: LiveState, step: StepName, code: string, recovery: string[], evidence?: { status: number | null; shape?: ResponseShape }): Promise<LiveOperationRecord> {
     const upd = this.withStep(this.patch(op, { state: "NEEDS_OPERATOR_REVIEW", failure: { code, step, messageFa: fa(code) }, recoveryFa: recovery }), step, { status: "unknown", endedAt: this.iso(), outcome: code });
     const saved = await this.persist(upd, from, code);
-    await this.d.audit(null, "operation_needs_review", { operationId: op.id, step, code });
+    // the HTTP status and (for an unreadable 2xx) the sanitised SHAPE of the answer are kept: without them an "unknown" upload cannot be diagnosed afterwards
+    await this.d.audit(null, "operation_needs_review", { operationId: op.id, step, code, ...(evidence ? { httpStatus: evidence.status, shape: evidence.shape ?? null } : {}) });
     return saved;
   }
 
@@ -295,7 +297,12 @@ export class LiaraDeploymentExecutor {
     const r = await this.d.transport.uploadSource(p.appName, artifact);
     if (!r.ok) {
       if (r.kind === "rejected") return this.finishFailed(cur, "UPLOADING_SOURCE", "upload_source", r.code, true, ["برنامهٔ ساخته‌شده حفظ شده است. مشکل را رفع کنید و برای انتشار، در کنسول لیارا یا با یک عملیات جدید (نام تازه) اقدام کنید. هیچ چیزی حذف نشد."]);
-      return this.needsReview(cur, "UPLOADING_SOURCE", "upload_source", r.code, ["نتیجهٔ بارگذاری نامعلوم است و راهی برای فهرست‌کردن سورس‌های بارگذاری‌شده نیست. این ابزار بارگذاری را خودکار تکرار نمی‌کند.", "در کنسول لیارا وضعیت برنامه را ببینید؛ در صورت لزوم عملیات را رها کنید."]);
+      const accepted = r.status !== null && r.status >= 200 && r.status < 300; // an answer in the 2xx range: Liara took the file, only its reply was unusable
+      return this.needsReview(cur, "UPLOADING_SOURCE", "upload_source", r.code, accepted ? [
+        "لیارا با وضعیت موفق (۲xx) پاسخ داد، یعنی فایل به احتمال زیاد دریافت و ذخیره شده است؛ فقط شناسهٔ سورس (sourceID) از پاسخ خوانده نشد. هیچ نسخه‌ای ساخته نشد و برنامه و نسخهٔ فعلی دست‌نخورده‌اند.",
+        "سورس ذخیره‌شده بی‌اثر است و فهرست‌کردن یا حذف آن از API ممکن نیست. این ابزار بارگذاری را خودکار تکرار نمی‌کند؛ ادامه فقط با یک عملیات تازه و تأیید تازهٔ شما ممکن است.",
+        "شکل پاسخ (بدون هیچ مقداری) در گزارش حسابرسی ثبت شده است؛ پیش از تلاش دوباره آن را بررسی کنید و این عملیات را رها کنید.",
+      ] : ["نتیجهٔ بارگذاری نامعلوم است و راهی برای فهرست‌کردن سورس‌های بارگذاری‌شده نیست. این ابزار بارگذاری را خودکار تکرار نمی‌کند.", "در کنسول لیارا وضعیت برنامه را ببینید؛ در صورت لزوم عملیات را رها کنید."], { status: r.status, shape: r.shape });
     }
     cur = this.withStep(this.patch(cur, { state: "SOURCE_UPLOADED", remote: { ...cur.remote, sourceId: r.data.sourceID }, ladder: { ...cur.ladder, sourceUploaded: "ok" } }), "upload_source", { status: "done", endedAt: this.iso(), outcome: "uploaded" });
     return this.persist(cur, "UPLOADING_SOURCE", "source_uploaded");
@@ -334,7 +341,7 @@ export class LiaraDeploymentExecutor {
       if (fresh.length > 1) break; // ambiguous: never guess
       await this.d.sleep(this.d.config.reconcileDelayMs);
     }
-    return this.needsReview(cur, "CREATING_RELEASE", "create_release", r.code, ["نتیجهٔ ساخت نسخه نامعلوم است. فهرست نسخه‌ها را در کنسول لیارا ببینید؛ این ابزار درخواست را دوباره نمی‌فرستد.", "اگر نسخه‌ای ساخته شده، «بررسی دوبارهٔ وضعیت» را بزنید."]);
+    return this.needsReview(cur, "CREATING_RELEASE", "create_release", r.code, ["نتیجهٔ ساخت نسخه نامعلوم است. فهرست نسخه‌ها را در کنسول لیارا ببینید؛ این ابزار درخواست را دوباره نمی‌فرستد.", "اگر نسخه‌ای ساخته شده، «بررسی دوبارهٔ وضعیت» را بزنید."], { status: r.status, shape: r.shape });
   }
 
   private async waitForApp(name: string): Promise<{ ok: true; scale: number | null } | { ok: false }> {

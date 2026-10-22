@@ -184,7 +184,7 @@ describe("deployment artifact: limits and hostile input", () => {
 describe("the demo fixture as an artifact", () => {
   it("packages exactly the trusted project files and nothing else", async () => {
     const a = await buildDeploymentArtifact(demoZip());
-    expect(a.paths).toEqual([".gitignore", "README.md", "app/health/route.js", "app/layout.js", "app/page.js", "next.config.js", "package-lock.json", "package.json"]);
+    expect(a.paths).toEqual([".gitignore", "README.md", "app/health/route.js", "app/layout.js", "app/page.js", "next.config.js", "package-lock.json", "package.json", "public/robots.txt"]);
     expect(a.excluded.sensitiveNames).toEqual([]);
     expect(a.warnings).toEqual([]);
   });

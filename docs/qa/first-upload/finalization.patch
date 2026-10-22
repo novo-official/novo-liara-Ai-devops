@@ -1,0 +1,216 @@
+--- a/src/server/live/contract.ts
++++ b/src/server/live/contract.ts
+@@ -20,7 +20,9 @@
+ /**
+  * Identifiers RETURNED by Liara (`sourceID`, `releaseID`). The OpenAPI only says `type: string` and the official CLI performs NO validation at all (it forwards
+  * `response.sourceID` verbatim), so no format may be invented: the first real upload ended "unknown" with a 2xx answer whose `sourceID` this project had refused to
+- * read. Accepted: 1–256 printable ASCII characters without whitespace, quotes or backslash. The value is only ever re-sent to Liara as a JSON string, rendered
++ * read. Local acceptance policy: 1–256 printable ASCII characters without whitespace, quotes or backslash. This defensive bound is NOT specified by Liara and is
++ * a subset of the documented string type, not a guarantee of accepting every vendor string. Unsupported strings keep an unknown outcome and are never retried.
++ * The value is only ever re-sent to Liara as a JSON string, rendered
+  * escaped and passed through the redaction layer; it is never put in a path, a shell or an HTML attribute.
+  */
+ export const VENDOR_ID = /^[\x21\x23-\x26\x28-\x5b\x5d-\x7e]{1,256}$/;
+--- a/src/server/live/response-shape.ts
++++ b/src/server/live/response-shape.ts
+@@ -1,7 +1,8 @@
+ /**
+  * SANITISED SHAPE of a write response — what the operator needs to diagnose an unreadable 2xx without ever storing upstream text. It records the HTTP status, the
+  * content type (token characters only), the byte count, whether the body was empty / JSON / not JSON, and for a JSON object the top-level key NAMES with the
+- * kind (and, for strings, the length and a coarse FORMAT class) of each value. It never contains a value, a fragment of a value or any text of a non-JSON body.
++ * kind (and, for strings, the length and a coarse FORMAT class) of each value. Only recognised protocol key names and media types are retained: unknown names
++ * can themselves contain secrets. It never contains a value, a fragment of a value or any text of a non-JSON body.
+  */
+ export interface ShapeKey {
+   name: string;
+@@ -30,11 +31,13 @@
+   firstChar?: string;
+ }
+ 
+-const safeName = (s: string) => s.replace(/[^A-Za-z0-9_$-]/g, "?").slice(0, 40);
++const DIAGNOSTIC_KEYS = new Set(["sourceID", "sourceId", "source_id", "releaseID", "releaseId", "release_id", "id", "data", "result", "error", "errors", "message", "code", "status"]);
++const safeName = (s: string) => DIAGNOSTIC_KEYS.has(s) ? s : "[other]";
++const MEDIA_TYPES = new Set(["application/json", "application/problem+json", "text/json", "text/plain", "text/html", "application/octet-stream"]);
+ export const safeContentType = (raw: string | null): string | null => {
+   if (!raw) return null;
+-  const m = /^\s*([A-Za-z0-9!#$&^_.+-]{1,60}\/[A-Za-z0-9!#$&^_.+-]{1,60})/.exec(raw);
+-  return m ? m[1]!.toLowerCase() : "?";
++  const type = raw.split(";", 1)[0]!.trim().toLowerCase();
++  return MEDIA_TYPES.has(type) ? type : "?";
+ };
+ 
+ function stringFormat(s: string): ShapeKey["format"] {
+@@ -67,7 +70,7 @@
+   const hit = json && typeof json === "object" && !Array.isArray(json) && Object.prototype.hasOwnProperty.call(json, expectedKey) ? keyInfo(expectedKey, (json as Record<string, unknown>)[expectedKey]) : null;
+   return {
+     status: meta.status,
+-    contentType: meta.contentType,
++    contentType: safeContentType(meta.contentType),
+     bytes: meta.bytes,
+     body: meta.body,
+     lead,
+--- a/tests/unit/response-shape.test.ts
++++ b/tests/unit/response-shape.test.ts
+@@ -4,6 +4,7 @@
+ import { CreateReleaseRequestSchema, NON_REPO_GIT_INFO, UploadSourceResponseSchema, VENDOR_ID } from "@/server/live/contract";
+ import { describeResponse, safeContentType } from "@/server/live/response-shape";
+ import { CANARY } from "../helpers/canaries";
++import { __setLogSinkForTests } from "@/server/security/logger";
+ 
+ const mk = (handler: (url: URL, init: RequestInit) => Response | Promise<Response>) => {
+   const calls: { url: URL; init: RequestInit }[] = [];
+@@ -46,7 +47,7 @@
+     expect(r).toMatchObject({ ok: false, kind: "unknown_outcome", status: 200, code: "malformed_response" });
+     const shape = (r as { shape: unknown }).shape;
+     expect(shape).toMatchObject({ status: 200, contentType: "application/json", body: "json", lead: "object", expected: { key: "sourceID", present: true, type: "string", length: secret.length, format: "has_space" } });
+-    expect((shape as { keys: { name: string; type: string }[] }).keys.map((k) => `${k.name}:${k.type}`)).toEqual(["sourceID:string", "note:string", "n:number", "nested:object"]);
++    expect((shape as { keys: { name: string; type: string }[] }).keys.map((k) => `${k.name}:${k.type}`)).toEqual(["sourceID:string", "[other]:string", "[other]:number", "[other]:object"]);
+     const text = JSON.stringify(shape);
+     for (const leak of ["SECRET-VALUE", "do not leak", CANARY.token]) expect(text).not.toContain(leak);
+   });
+@@ -73,10 +74,26 @@
+     for (let i = 0; i < 30; i++) body["k" + i] = i;
+     const shape = ((await upload(json(body, { headers: { "content-type": "application/json; boundary=" + "z".repeat(500) } }))) as { shape: { keys: { name: string }[]; contentType: string } }).shape;
+     expect(shape.keys.length).toBe(12);
+-    expect(shape.keys[0]!.name).toMatch(/^[A-Za-z0-9_$?-]{1,40}$/);
++    expect(shape.keys[0]!.name).toBe("[other]");
+     expect(shape.contentType).toMatch(/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$|^\?$/);
+     expect(safeContentType(null)).toBeNull();
+     expect(safeContentType("garbage")).toBe("?");
++  });
++  it("never retains secrets encoded as syntactically valid key names or media types, including in logs", async () => {
++    const secret = "UNRECOGNIZED_PRIVATE_VALUE";
++    const logs: string[] = [];
++    __setLogSinkForTests((line) => logs.push(line));
++    try {
++      const r = await upload(json({ [secret]: secret, sourceID: 42 }, { headers: { "content-type": `application/${secret}` } }));
++      expect(r).toMatchObject({ ok: false, shape: { contentType: "?", keys: [{ name: "[other]" }, { name: "sourceID" }] } });
++      expect(logs.some((line) => line.includes("liara.write_unreadable"))).toBe(true);
++      expect(JSON.stringify({ r, logs })).not.toContain(secret);
++      expect(safeContentType(`application/json${secret}`)).toBe("?");
++      expect(safeContentType(" APPLICATION/JSON ; token=private")).toBe("application/json");
++      expect(describeResponse({ status: 200, contentType: `text/${secret}`, bytes: 1, body: "non_json" }, undefined, "sourceID").contentType).toBe("?");
++    } finally {
++      __setLogSinkForTests(() => undefined);
++    }
+   });
+   it("describeResponse is pure and a 2xx is never treated as a retryable failure (one request only)", async () => {
+     const s = describeResponse({ status: 200, contentType: null, bytes: 2, body: "json" }, { releaseID: "r" }, "releaseID");
+--- a/tests/integration/live-incident-safety.test.ts
++++ b/tests/integration/live-incident-safety.test.ts
+@@ -4,6 +4,7 @@
+ import type { LiveWriteTransport } from "@/server/live/contract";
+ import { CreateReleaseRequestSchema, NON_REPO_GIT_INFO, UploadSourceResponseSchema, VENDOR_ID } from "@/server/live/contract";
+ import { FakeLiara, harness, OTHER, OWNER, settle } from "../helpers/live-exec";
++import type { LiveStore } from "@/server/live/store";
+ 
+ const APP = "liara-agent-demo";
+ const code = async (p: Promise<unknown>) => {
+@@ -16,8 +17,8 @@
+ };
+ 
+ /** reproduces the incident: existing app, REST backend, Liara answers 2xx but the sourceID cannot be read */
+-async function incident() {
+-  const h = await harness();
++async function incident(store?: LiveStore) {
++  const h = await harness({ store });
+   h.fake.apps.add(APP);
+   h.fake.releaseIds.push("rel_old_1");
+   h.fake.upload = "malformed";
+@@ -114,9 +115,9 @@
+   });
+ });
+ 
+-describe("the sourceID parser is compatible with the pinned official contract and safe by construction", () => {
++describe("opaque sourceIDs follow the pinned contract within an explicit local safety policy", () => {
+   const yaml = readFileSync("docs/reference/openapi/paas.yaml", "utf8");
+-  it("the pinned OpenAPI says `sourceID: type: string` with NO pattern/format/enum/length — so the client may not invent one", () => {
++  it("the pinned OpenAPI says `sourceID: type: string` with NO pattern/format/enum/length; the local bound is not a vendor requirement", () => {
+     const block = yaml.slice(yaml.indexOf("'/v2/projects/{name}/sources'"), yaml.indexOf("'/v2/projects/{name}/releases'"));
+     const m = /sourceID:\s*\n\s*type: string\s*\n/.exec(block);
+     expect(m, "sourceID declared as a plain string").not.toBeNull();
+@@ -126,7 +127,7 @@
+     expect(/sourceID:\s*\n\s*type: string/.test(rel)).toBe(true);
+     expect(rel.slice(0, 400)).not.toMatch(/pattern|enum|maxLength/);
+   });
+-  it("property: whatever is accepted is printable ASCII without whitespace/quote/backslash, so it is inert in JSON, headers, logs and HTML; and round-trips unchanged into the release body", () => {
++  it("property: every accepted value satisfies the local ASCII policy and round-trips unchanged through the actual JSON release sink (other sinks still need escaping)", () => {
+     let seed = 1234567;
+     const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32;
+     const pool = Array.from({ length: 140 }, (_, i) => String.fromCharCode(i)).concat(["آ", "é", "\u2028", "\u200e", "😀"]);
+@@ -165,6 +166,75 @@
+     expect(fin.failure, JSON.stringify(fin)).toBeNull();
+     const rel = h.fake.calls.find((c) => c.op === "createRelease");
+     expect((rel?.body as { sourceID: string }).sourceID).toBe(id);
++  });
++});
++
++describe("incident recovery survives SQLite persistence", () => {
++  it("the HTTP client diagnostics reach SQLite audit without response values, unknown key names or arbitrary media types", async () => {
++    const { mkdtempSync, rmSync } = await import("node:fs");
++    const { tmpdir } = await import("node:os");
++    const path = await import("node:path");
++    const { SqliteLiveStore } = await import("@/server/live/store");
++    const { LiaraWriteClient } = await import("@/server/live/write-client");
++    const { Secret } = await import("@/server/security/secret");
++    const dir = mkdtempSync(path.join(tmpdir(), "live-incident-diagnostics-"));
++    try {
++      const store = new SqliteLiveStore(path.join(dir, "audit.sqlite"));
++      const h = await harness({ store });
++      const secret = "PRIVATE_UPSTREAM_DIAGNOSTIC_CANARY";
++      let attempts = 0;
++      const client = new LiaraWriteClient({
++        baseUrl: new URL("https://api.liara.ir"), token: new Secret("offline-fake-token"), teamId: null, timeoutMs: 1000, uploadTimeoutMs: 1000,
++        fetchImpl: (async () => {
++          attempts++;
++          return new Response(JSON.stringify({ sourceID: 42, message: secret, [secret]: secret }), { status: 201, headers: { "content-type": `application/${secret}` } });
++        }) as typeof fetch,
++      });
++      h.fake.apps.add(APP);
++      h.fake.transport.uploadSource = (app, bytes) => client.uploadSource(app, bytes);
++      const v = await h.svc.createExistingProposal(OWNER, { runId: h.runId, appName: APP, backend: "api", zip: h.zip });
++      await h.svc.decide(v.proposal.id, OWNER, { decision: "approve", digest: v.proposal.digest, confirmAppName: APP });
++      const final = await settle(h, (await h.svc.execute(v.proposal.id, OWNER, h.zip)).id);
++      expect(final.state).toBe("NEEDS_OPERATOR_REVIEW");
++      expect(attempts).toBe(1);
++      expect(h.fake.calls).toEqual([]); // neither createApp nor createRelease
++      const audit = await store.readAudit(500);
++      const row = audit.find((r) => r.event === "live.operation_needs_review");
++      expect(JSON.parse(row!.data)).toMatchObject({ httpStatus: 201, shape: { status: 201, contentType: "?", body: "json", expected: { key: "sourceID", present: true, type: "number" } } });
++      expect(JSON.stringify({ final, audit })).not.toContain(secret);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
++  });
++
++  it("concurrent abandon changes one local row once; a reopened store still rejects replay without touching the write transport", async () => {
++    const { mkdtempSync, rmSync } = await import("node:fs");
++    const { tmpdir } = await import("node:os");
++    const path = await import("node:path");
++    const { SqliteLiveStore } = await import("@/server/live/store");
++    const dir = mkdtempSync(path.join(tmpdir(), "live-incident-recovery-"));
++    try {
++      const db = path.join(dir, "incident.sqlite");
++      const { h, v, final } = await incident(new SqliteLiveStore(db));
++      const calls = [...h.fake.calls];
++      const hits: string[] = [];
++      const svc = h.rebuild({ transport: forbiddenTransport(hits) });
++      const outcomes = await Promise.allSettled([svc.resolve(final.id, OWNER, "abandon"), svc.resolve(final.id, OWNER, "abandon")]);
++      expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
++      expect(outcomes.filter((r) => r.status === "rejected")).toHaveLength(1);
++      const store = new SqliteLiveStore(db);
++      const restarted = h.rebuild({ store, transport: forbiddenTransport(hits) });
++      expect((await store.getOperation(final.id))?.failure?.code).toBe("abandoned_by_operator");
++      expect((await store.getLiveProposal(v.proposal.id))?.status).toBe("CONSUMED");
++      expect(await code(restarted.execute(v.proposal.id, OWNER, h.zip))).toBe("live_not_approved");
++      expect(await code(restarted.decide(v.proposal.id, OWNER, { decision: "approve", digest: v.proposal.digest, confirmAppName: APP }))).toBe("live_already_decided");
++      expect(await code(restarted.resolve(final.id, OWNER, "abandon"))).toBe("live_invalid_state");
++      expect((await store.readAudit(500)).filter((r) => r.event === "live.operation_abandoned")).toHaveLength(1);
++      expect(hits).toEqual([]);
++      expect(h.fake.calls).toEqual(calls);
++    } finally {
++      rmSync(dir, { recursive: true, force: true });
++    }
+   });
+ });
+ 

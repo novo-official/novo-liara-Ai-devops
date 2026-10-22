@@ -1,6 +1,8 @@
 import "server-only";
 import { getConfig } from "../config/env";
 import { getSharedStore } from "../diagnostics/runtime";
+import { ownerHashOf } from "../diagnostics/store";
+import { hasActiveSession } from "../security/session";
 import { getService } from "../liara/service";
 import { liveReaderFrom } from "./reader";
 import { LiveDeploymentService } from "./service";
@@ -19,7 +21,7 @@ export function getLiveService(): LiveDeploymentService {
   if (testService) return testService;
   if (g.__liveService) return g.__liveService;
   const cfg = getConfig();
-  g.__liveService = new LiveDeploymentService({ cfg, store: getSharedStore(), reader: liveReaderFrom(getService()), transport: createLiveWriteClient(cfg), cliBackend: createCliBackend(cfg) });
+  g.__liveService = new LiveDeploymentService({ cfg, store: getSharedStore(), reader: liveReaderFrom(getService()), transport: createLiveWriteClient(cfg), cliBackend: createCliBackend(cfg), isOwnerActive: (ownerHash) => hasActiveSession((id) => ownerHashOf(id) === ownerHash) });
   return g.__liveService;
 }
 

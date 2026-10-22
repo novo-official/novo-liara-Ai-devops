@@ -1,0 +1,73 @@
+"""Public primary-source evidence via GET only. No credentials or Liara API calls."""
+import concurrent.futures
+import datetime
+import hashlib
+import json
+from pathlib import Path
+import urllib.parse
+import urllib.request
+
+OUT = Path(__file__).parent
+ROOT = OUT.parent
+HEADERS = {"User-Agent": "offline-incident-contract-review", "Accept": "application/vnd.github+json"}
+
+def get(url):
+    assert urllib.parse.urlparse(url).hostname in {"api.github.com", "raw.githubusercontent.com"}
+    req = urllib.request.Request(url, headers=HEADERS, method="GET")
+    with urllib.request.urlopen(req, timeout=35) as response:
+        return response.read(), response.headers.get("Link", "")
+
+contracts = []
+for repo, branch, paths in [
+    ("openapi", "main", ["spec/paas.yaml"]),
+    ("cli", "master", ["src/services/upload.ts", "src/commands/deploy.ts"]),
+]:
+    raw, _ = get(f"https://api.github.com/repos/liara-cloud/{repo}/commits/{branch}")
+    sha = json.loads(raw)["sha"]
+    for source in paths:
+        url = f"https://raw.githubusercontent.com/liara-cloud/{repo}/{sha}/{source}"
+        body, _ = get(url)
+        destination = OUT / (repo + "-" + source.rsplit("/", 1)[-1] + ".txt")
+        destination.write_bytes(body)
+        item = {"repo": repo, "commit": sha, "url": url, "sha256": hashlib.sha256(body).hexdigest()}
+        if repo == "openapi":
+            item["identicalToPinnedContract"] = body == (ROOT / "docs/reference/openapi/paas.yaml").read_bytes()
+        contracts.append(item)
+
+pairs = set()
+inventory = []
+for filename in ["package-lock.json", "fixtures/demo-app/package-lock.json"]:
+    lock = json.loads((ROOT / filename).read_text())
+    for path, package in lock["packages"].items():
+        if not path or not package.get("version"):
+            continue
+        name = package.get("name") or path.rsplit("node_modules/", 1)[-1]
+        pair = f"{name}@{package['version']}"
+        pairs.add(pair)
+        inventory.append({"lock": filename, "path": path, "name": name, "version": package["version"], "dev": package.get("dev", False)})
+(OUT / "dependency-inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
+
+def scan(chunk):
+    url = "https://api.github.com/advisories?" + urllib.parse.urlencode({"ecosystem": "npm", "type": "reviewed", "affects": ",".join(chunk), "per_page": "100"})
+    records = []
+    requests = 0
+    while url:
+        body, links = get(url)
+        requests += 1
+        records.extend(json.loads(body))
+        url = next((part.split(";")[0].strip().strip("<>") for part in links.split(",") if 'rel="next"' in part), None)
+    return records, requests
+
+ordered = sorted(pairs)
+chunks = [ordered[n:n+35] for n in range(0, len(ordered), 35)]
+advisories = {}
+count = 0
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    for records, requests in pool.map(scan, chunks):
+        count += requests
+        for record in records:
+            advisories[record["ghsa_id"]] = record
+report = {"generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "method": "GET", "serviceWrites": 0,
+          "contracts": contracts, "dependencyScan": {"source": "GitHub reviewed npm advisories", "packageVersionPairs": len(pairs), "getRequests": count, "advisories": list(advisories.values())}}
+(OUT / "public-source-review.json").write_text(json.dumps(report, indent=2) + "\n")
+print(json.dumps({"contracts": contracts, "packageVersionPairs": len(pairs), "getRequests": count, "advisories": list(advisories)}))

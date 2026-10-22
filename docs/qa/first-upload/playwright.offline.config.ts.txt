@@ -1,0 +1,18 @@
+import { defineConfig } from "@playwright/test";
+import config from "./playwright.config";
+
+export default defineConfig({
+  ...config,
+  testDir: "./tests/e2e",
+  outputDir: "/tmp/liara-incident-final-ybw0iyi0/verification/playwright-results-final",
+  reporter: [["list"], ["json", { outputFile: "/tmp/liara-incident-final-ybw0iyi0/verification/playwright-final.json" }]],
+  use: { ...config.use, launchOptions: { args: ["--disable-background-networking", "--disable-component-update", "--disable-sync"] } },
+  webServer: {
+    ...config.webServer,
+    command: "node_modules/.bin/next start -p 3131",
+    cwd: "/tmp/liara-incident-final-ybw0iyi0",
+    url: "http://localhost:3131/api/health",
+    reuseExistingServer: false,
+    env: { ...(Array.isArray(config.webServer) ? {} : config.webServer?.env), LIARA_LIVE_DEPLOY_ENABLED: "false", LIARA_CLI_ENABLED: "false", NEXT_TELEMETRY_DISABLED: "1", NODE_OPTIONS: "--require=/tmp/liara-incident-final-ybw0iyi0/verification/offline-egress.cjs" },
+  },
+});

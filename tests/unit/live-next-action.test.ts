@@ -5,7 +5,7 @@ import { liveUi } from "@/i18n/live-fa";
 
 const base: NextActionInput = {
   mode: "live_disabled", readinessOk: true, runBlockers: [], artifact: "match", hasTargets: true, targetName: "liara-agent-demo", targetReady: true, targetBlocked: [],
-  backendReady: false, backendBlockers: ["live_flag", "contract_attested"], preview: "none", previewExecutionBlockers: [], proposal: null, opState: null,
+  backendReady: false, backendBlockers: ["live_flag", "contract_attested"], preview: "none", previewExecutionBlockers: [], proposal: null, opState: null, lockState: null,
 };
 const act = (o: Partial<NextActionInput>) => nextAction({ ...base, ...o });
 
@@ -33,6 +33,13 @@ describe("next action for the existing-app path (one answer, strict priority)", 
     expect(act({ targetReady: false, targetBlocked: ["domain_suffix_expected"] })).toMatchObject({ id: "fix_target", operatorBlockers: ["domain_suffix_expected"] });
     expect(act({ hasTargets: false, targetName: null }).id).toBe("choose_target");
   });
+  it("an operation from a PREVIOUS run that still holds the (team, app) slot is named first: review → resolve it; in flight → wait", () => {
+    expect(act({ lockState: "NEEDS_OPERATOR_REVIEW" })).toMatchObject({ id: "resolve_previous", tone: "blocked" });
+    expect(act({ lockState: "AWAITING_LIVE_APPROVAL", artifact: "none" }).id).toBe("resolve_previous");
+    expect(act({ lockState: "UPLOADING_SOURCE" }).id).toBe("wait_in_progress");
+    expect(act({ lockState: "NEEDS_OPERATOR_REVIEW", preview: "ok", mode: "live_enabled", backendReady: true, backendBlockers: [] }).id).toBe("resolve_previous"); // never offers 'create request' under a lock
+    expect(act({ lockState: null, preview: "ok", mode: "live_enabled", backendReady: true, backendBlockers: [] }).id).toBe("create_request");
+  });
   it("an approved proposal can only be executed with the SAME selected file; a missing or different file blocks it", () => {
     expect(act({ proposal: "APPROVED", artifact: "none" }).id).toBe("choose_zip");
     expect(act({ proposal: "APPROVED", artifact: "mismatch" }).id).toBe("fix_zip");
@@ -40,7 +47,7 @@ describe("next action for the existing-app path (one answer, strict priority)", 
   });
   it("live disabled never offers 'create request'; every state has Persian text; every operator blocker has a step text", () => {
     for (const mode of ["simulation", "live_disabled"] as const) expect(act({ mode, preview: "ok", backendReady: true, backendBlockers: [] }).id).not.toBe("create_request");
-    for (const id of ["wait_in_progress", "done_verified", "review_failure", "execute_approved", "approve_pending", "fix_source", "choose_zip", "wait_hash", "fix_zip", "choose_target", "fix_target", "run_preview", "operator_enable_live", "create_request"]) {
+    for (const id of ["wait_in_progress", "done_verified", "review_failure", "execute_approved", "approve_pending", "fix_source", "choose_zip", "wait_hash", "fix_zip", "choose_target", "fix_target", "run_preview", "operator_enable_live", "create_request", "resolve_previous"]) {
       expect(liveUi.flow.next[id], id).toBeTruthy();
       expect(liveUi.flow.next[id]!.detail).toMatch(/[؀-ۿ]/);
     }

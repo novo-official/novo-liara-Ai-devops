@@ -534,6 +534,12 @@ describe("timeouts, unknown outcomes and reconciliation (never a blind retry)", 
     const { final } = await deploy(h);
     expect(final.state).toBe("NEEDS_OPERATOR_REVIEW");
     expect(final.ladder.sourceUploaded).toBe("unknown");
+    // the evidence survives: HTTP status + sanitised shape are in the audit trail, and the recovery text says Liara DID answer 2xx (source probably stored, id unreadable)
+    const row = (await h.store.readAudit(500)).find((r) => r.event === "live.operation_needs_review");
+    expect(JSON.parse(row!.data)).toMatchObject({ step: "upload_source", code: "malformed_response", httpStatus: 200, shape: { status: 200, body: "json", expected: { key: "sourceID", present: true, type: "string" } } });
+    expect(final.recoveryFa.join(" ")).toContain("۲xx");
+    expect(final.recoveryFa.join(" ")).toContain("sourceID");
+    expect(h.fake.calls.map((c) => c.op)).toEqual(["createApp", "uploadSource"]); // upload never retried, no release attempted
   });
   it("release timeout and a NEW release id appears ⇒ adopted (one create, no repeat)", async () => {
     const h = await harness();

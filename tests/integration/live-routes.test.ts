@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __setLiveServiceForTests } from "@/server/live/runtime";
 import { __resetApiLimiterForTests } from "@/server/security/guard";
-import { __clearSessionsForTests, createSession } from "@/server/security/session";
+import { __clearSessionsForTests, createSession, destroySession, hasActiveSession } from "@/server/security/session";
+import { ownerHashOf } from "@/server/diagnostics/store";
 import { assertNoCanary } from "../helpers/canaries";
-import { harness, type Harness } from "../helpers/live-exec";
+import { AgentRunManager } from "@/server/agent/manager";
+import { MockDiagnosticLLMProvider } from "@/server/diagnostics/llm";
+import { harness, settle, type Harness } from "../helpers/live-exec";
+import { mockSvc } from "../helpers/scenario-runner";
 import { resetAll } from "../helpers/live";
 
 import * as status from "@/app/api/agent/live/status/route";
@@ -155,5 +159,94 @@ describe("live routes — the whole journey over HTTP (fake transport only)", ()
     const { api } = await setup();
     const r = await api.propose({ "content-type": "application/json" });
     expect(r.status).toBe(422);
+  });
+});
+
+describe("recovery over HTTP: an operation left in review by an EARLIER run can be abandoned from the new run, then a fresh proposal works", () => {
+  it("status lists the lock; POST resolve {abandon} closes it (200, FAILED, local only); the next proposal is accepted; the old row and audit remain", async () => {
+    const { h, api, cookie } = await setup();
+    h.fake.apps.add("liara-agent-demo");
+    h.fake.releaseIds.push("rel_old_1");
+    h.fake.upload = "malformed";
+    const existing = { "x-live-kind": "deploy_existing_app", "x-live-backend": "api" };
+    const p1 = await j(await api.propose(existing));
+    await api.decide(p1.proposal.id, { decision: "approve", digest: p1.proposal.digest, confirmAppName: "liara-agent-demo" });
+    const ex = await j(await api.execute(p1.proposal.id));
+    const first = await settle(h, ex.id, cookie.split("=")[1]!);
+    expect(first.state).toBe("NEEDS_OPERATOR_REVIEW");
+    // the operator re-uploads the project: a NEW run
+    const agent = new AgentRunManager({ svc: mockSvc(), store: h.store, provider: new MockDiagnosticLLMProvider("ok"), now: h.clk.now, quotaPerWindow: 99 });
+    const run2 = (await agent.receiveProject({ sessionId: cookie.split("=")[1]!, archive: h.zip, filename: "demo.zip" })).runId;
+    h.fake.upload = "ok";
+    // 1. the new proposal is refused (the lock is the OPERATION, not the consumed proposal)
+    const refused = await api.propose({ ...existing, "x-live-run": run2 });
+    expect(refused.status).toBe(409);
+    expect((await j(refused)).error.code).toBe("live_operation_in_progress");
+    // 2. the status of the new run now exposes it
+    const st = await j(await api.status(run2));
+    expect(st.locks.map((l: { operation: { id: string } | null; state: string }) => `${l.operation?.id}:${l.state}`)).toEqual([`${first.id}:NEEDS_OPERATOR_REVIEW`]);
+    // 3. abandon: local only
+    const calls = [...h.fake.calls];
+    const ab = await api.resolve(first.id, { action: "abandon" });
+    expect(ab.status).toBe(200);
+    expect((await j(ab)).state).toBe("FAILED");
+    expect(h.fake.calls).toEqual(calls);
+    expect((await j(await api.status(run2))).locks).toEqual([]);
+    // 4. replay of the old operation is refused
+    expect((await api.resolve(first.id, { action: "abandon" })).status).toBe(409);
+    expect((await api.execute(p1.proposal.id)).status).toBe(409);
+    // 5. a fresh proposal now works and is a different one
+    const fresh = await api.propose({ ...existing, "x-live-run": run2 });
+    expect(fresh.status).toBe(200);
+    expect((await j(fresh)).proposal.id).not.toBe(p1.proposal.id);
+    expect((await h.store.getOperation(first.id))?.state).toBe("FAILED");
+    assertNoCanary(JSON.stringify(await h.store.readAudit(1000)));
+  });
+});
+
+describe("recovery over HTTP after a NEW LOGIN (the real incident): ownership follows the login session", () => {
+  it("while the old login lives the lock is a stub and untouchable; once it is gone the new login can close it — only with the explicit flag; approve/execute never transfer", async () => {
+    const { h, api, cookie } = await setup();
+    const sessionA = cookie.split("=")[1]!;
+    h.fake.apps.add("liara-agent-demo");
+    h.fake.releaseIds.push("rel_old_1");
+    h.fake.upload = "malformed";
+    const existing = { "x-live-kind": "deploy_existing_app", "x-live-backend": "api" };
+    const p1 = await j(await api.propose(existing));
+    await api.decide(p1.proposal.id, { decision: "approve", digest: p1.proposal.digest, confirmAppName: "liara-agent-demo" });
+    const first = await settle(h, (await j(await api.execute(p1.proposal.id))).id, sessionA);
+    expect(first.state).toBe("NEEDS_OPERATOR_REVIEW");
+    // the production wiring: "is the owner's login still alive?" asks the real in-memory session store
+    const svc = h.rebuild({ isOwnerActive: (o) => hasActiveSession((id) => ownerHashOf(id) === o) });
+    __setLiveServiceForTests(svc);
+    // a NEW login (session B) uploads the project again → run #2 owned by B
+    const B = createSession();
+    const cookieB = `liara_agent_session=${B.id}`;
+    const hdrB = (extra: Record<string, string> = {}) => ({ cookie: cookieB, origin: ORIGIN, ...extra });
+    const agent = new AgentRunManager({ svc: mockSvc(), store: h.store, provider: new MockDiagnosticLLMProvider("ok"), now: h.clk.now, quotaPerWindow: 99 });
+    const run2 = (await agent.receiveProject({ sessionId: B.id, archive: h.zip, filename: "demo.zip" })).runId;
+    const statusB = async () => j(await status.GET(new Request(`${ORIGIN}/api/agent/live/status?runId=${run2}`, { headers: { cookie: cookieB } })));
+    const resolveB = (body: unknown) => (resolve as unknown as Route).POST(new Request(`${ORIGIN}/api/agent/live/operations/${first.id}/resolve`, { method: "POST", headers: hdrB({ "content-type": "application/json" }), body: JSON.stringify(body) }), { params: Promise.resolve({ id: first.id }) });
+    // A is still logged in → B sees a stub only and gets 404 whatever it sends
+    const stub = await statusB();
+    expect(stub.locks).toMatchObject([{ access: "other_session", appName: "liara-agent-demo", state: "NEEDS_OPERATOR_REVIEW", operation: null }]);
+    expect(JSON.stringify(stub.locks)).not.toContain(first.id);
+    expect((await resolveB({ action: "abandon", adoptOrphan: true })).status).toBe(404);
+    // A logs out / restarts → B sees the full record and the recovery controls become available, still behind the explicit flag
+    destroySession(sessionA);
+    expect((await statusB()).locks).toMatchObject([{ access: "orphan", operation: { id: first.id, state: "NEEDS_OPERATOR_REVIEW" } }]);
+    expect((await resolveB({ action: "abandon" })).status).toBe(404);
+    const executeB = (execute as unknown as Route).POST(new Request(`${ORIGIN}/x`, { method: "POST", headers: hdrB({ "content-type": "application/zip" }), body: new Uint8Array(h.zip) }), { params: Promise.resolve({ id: p1.proposal.id }) });
+    expect((await executeB).status).toBe(404);
+    const calls = [...h.fake.calls];
+    const ok = await resolveB({ action: "abandon", adoptOrphan: true });
+    expect(ok.status).toBe(200);
+    expect((await j(ok)).state).toBe("FAILED");
+    expect(h.fake.calls).toEqual(calls);
+    expect((await statusB()).locks).toEqual([]);
+    const events = (await h.store.readAudit(1000)).map((r) => r.event);
+    expect(events).toContain("live.operation_recovery_by_other_session");
+    expect(events).toContain("live.operation_abandoned");
+    expect((await h.store.getOperation(first.id))?.state).toBe("FAILED"); // kept, not deleted
   });
 });

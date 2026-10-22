@@ -1,0 +1,39 @@
+import { chromium, expect } from "@playwright/test";
+import { writeFileSync } from "node:fs";
+
+const browser = await chromium.launch({ channel: "chrome", args: ["--disable-background-networking", "--disable-component-update", "--disable-sync"] });
+const context = await browser.newContext({ locale: "fa-IR" });
+const requests = [];
+const denied = [];
+await context.route("**/*", (route) => {
+  const request = route.request();
+  const url = new URL(request.url());
+  requests.push({ method: request.method(), pathname: url.pathname });
+  if (url.origin !== "http://127.0.0.1:3125" || request.method() !== "GET") {
+    denied.push(url.origin);
+    return route.abort();
+  }
+  return route.continue();
+});
+try {
+  const page = await context.newPage();
+  const sizes = [];
+  for (const width of [360, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    const response = await page.goto("http://127.0.0.1:3125/");
+    expect(response.status()).toBe(200);
+    await expect(page.locator("#marker")).toHaveText("liara-agent-demo v1");
+    const size = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }));
+    expect(size.scrollWidth).toBeLessThanOrEqual(size.width);
+    sizes.push(size);
+    await page.screenshot({ path: `verification/demo-${width}.png`, fullPage: true });
+  }
+  await page.goto("http://127.0.0.1:3125/health");
+  const health = JSON.parse(await page.locator("body").innerText());
+  expect(health).toEqual({ status: "ok", app: "liara-agent-demo", version: "1" });
+  expect(denied).toEqual([]);
+  writeFileSync("verification/demo-preview-check.json", JSON.stringify({ sizes, health, requests, externalRequests: denied.length, postRequests: requests.filter((r) => r.method === "POST").length }, null, 2) + "\n");
+  console.log("Local production demo: 3 viewports and GET /health passed; no POST or external page requests.");
+} finally {
+  await browser.close();
+}

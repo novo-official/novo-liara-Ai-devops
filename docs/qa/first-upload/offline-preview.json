@@ -1,0 +1,220 @@
+{
+  "generatedAt": "2026-10-22T19:33:52.624Z",
+  "appName": "liara-agent-demo",
+  "kind": "deploy_existing_app",
+  "backend": "api",
+  "mode": "offline",
+  "note": "preview_only_not_an_approval",
+  "persisted": false,
+  "executable": false,
+  "target": {
+    "checked": false,
+    "reason": "offline_no_live_reads"
+  },
+  "artifact": {
+    "zipSha256": "80e5288707b83a3e411ff2ea4d544e4c8cde899727665feaceb4334864f26249",
+    "zipBytes": 8801,
+    "analysisDigest": "fd18e103f1b1056355256225c1c9cf2a9c2d0c81d2f2462d923cac913246b651",
+    "artifactDigest": "a26e1dde0009df7cdf8003680f7ef24a234448b9ac73eca8d7cce4eef6fbaf81",
+    "bytes": 8067,
+    "fileCount": 8,
+    "paths": [
+      ".gitignore",
+      "README.md",
+      "app/health/route.js",
+      "app/layout.js",
+      "app/page.js",
+      "next.config.js",
+      "package-lock.json",
+      "package.json"
+    ],
+    "format": "tar.gz;gzip-9;ustar;root-relative;sorted;mtime=0;modes=0644/0755-normalised;deterministic-v1",
+    "excluded": {
+      "byIgnoreRules": 0,
+      "sensitiveNames": [],
+      "dependencyEntries": 0
+    },
+    "deterministic": true
+  },
+  "readiness": {
+    "schemaVersion": 1,
+    "verdict": "READY",
+    "verdictFa": "آماده برای ادامه (بدون هشدار ایستا)",
+    "summaryFa": "پروژهٔ Next.js شناسایی شد و در بررسی ایستا هشداری ندارد. این به معنی تضمین موفقیت ساخت یا اجرا نیست.",
+    "staticNoticeFa": "این گزارش فقط از «خواندن ایستای» فایل‌ها ساخته شده است؛ هیچ کدی اجرا، نصب یا ساخته نشده. این به معنی تضمین موفقیت ساخت یا اجرا نیست و پروژه «آمادهٔ تولید» اعلام نمی‌شود.",
+    "framework": {
+      "id": "next",
+      "nameFa": "Next.js",
+      "confidence": "high",
+      "supported": true
+    },
+    "findings": [
+      {
+        "id": "framework_next",
+        "kind": "detected",
+        "severity": "info",
+        "titleFa": "پروژهٔ Next.js شناسایی شد",
+        "detailFa": "نسخهٔ اعلام‌شده: 16.x.",
+        "source": "package.json › dependencies.next",
+        "basis": "declared_in_manifest"
+      },
+      {
+        "id": "router_detected",
+        "kind": "detected",
+        "severity": "info",
+        "titleFa": "از App Router استفاده می‌شود",
+        "detailFa": "بر پایهٔ ساختار پوشه‌ها (استنباط ایستا).",
+        "source": "app/",
+        "basis": "static_inference"
+      }
+    ],
+    "checklist": [
+      {
+        "id": "source_supported",
+        "titleFa": "چارچوب پروژه پشتیبانی می‌شود",
+        "detailFa": "چارچوب: Next.js",
+        "kind": "auto",
+        "blocking": true,
+        "state": "ok",
+        "class": "D"
+      },
+      {
+        "id": "build_script",
+        "titleFa": "اسکریپت build وجود دارد",
+        "detailFa": "فرمان ساخت: npm run build",
+        "kind": "auto",
+        "blocking": true,
+        "state": "ok",
+        "class": "B"
+      },
+      {
+        "id": "start_script",
+        "titleFa": "اسکریپت start وجود دارد",
+        "detailFa": "فرمان اجرا: npm start",
+        "kind": "auto",
+        "blocking": true,
+        "state": "ok",
+        "class": "B"
+      },
+      {
+        "id": "node_version",
+        "titleFa": "نسخهٔ Node.js مشخص و سازگار است",
+        "detailFa": "اعلام‌شده: >=20.9",
+        "kind": "auto",
+        "blocking": false,
+        "state": "ok",
+        "class": "D"
+      },
+      {
+        "id": "lockfile",
+        "titleFa": "lockfile برای نصب قطعی وجود دارد",
+        "detailFa": "package-lock.json",
+        "kind": "auto",
+        "blocking": false,
+        "state": "ok",
+        "class": "C"
+      },
+      {
+        "id": "env_values",
+        "titleFa": "متغیر محیطی الزامی شناسایی نشد",
+        "detailFa": "ممکن است برنامه بدون پیکربندی اجرا شود؛ این یک استنباط ایستا است.",
+        "kind": "auto",
+        "blocking": false,
+        "state": "not_applicable",
+        "class": "A"
+      },
+      {
+        "id": "sensitive_files",
+        "titleFa": "فایل حساسی در آرشیو نیست",
+        "detailFa": "موردی دیده نشد",
+        "kind": "auto",
+        "blocking": false,
+        "state": "ok",
+        "class": "C"
+      },
+      {
+        "id": "account_ready",
+        "titleFa": "حساب لیارا آماده است و اعتبار کافی دارد",
+        "detailFa": "شارژ حساب و خرید پلن همیشه دستی و به عهدهٔ شماست؛ این ابزار هیچ هزینه‌ای ایجاد نمی‌کند و موجودی را نمی‌خواند.",
+        "kind": "manual",
+        "blocking": false,
+        "state": "pending",
+        "class": "C"
+      }
+    ],
+    "nextActionsFa": [
+      "می‌توانید طرح استقرار شبیه‌سازی‌شده را بسازید و بازبینی کنید."
+    ],
+    "limitations": [
+      "تحلیل ایستا است؛ ساخت و اجرای واقعی بررسی نشده است.",
+      "نام متغیرهای محیطی از فایل‌های نمونه و ارجاع‌های متغیر محیطی در کد استنباط می‌شود و ممکن است ناقص یا اضافه باشد.",
+      "وجود پایگاه‌داده و نیاز به دیسک از روی وابستگی‌ها حدس زده می‌شود.",
+      "رفتار پلتفرم لیارا (فرمان start، پورت، نسخهٔ Node) تأیید زنده نشده است."
+    ],
+    "decisions": {
+      "envConfirmed": false,
+      "databaseConfirmed": false,
+      "storageConfirmed": false,
+      "accountReady": false
+    }
+  },
+  "recommendation": {
+    "approach": {
+      "id": "next_server",
+      "platformCandidate": "next",
+      "titleFa": "اجرای برنامهٔ Next.js روی پلتفرم next",
+      "reasonsFa": [
+        "پروژه به رندر سمت سرور/مسیرهای API نیاز دارد یا خروجی استاتیک انتخاب نشده است.",
+        "شناسهٔ پلتفرم «next» فقط از CLI رسمی مشاهده شده و تأیید زنده نشده است."
+      ]
+    },
+    "resources": {
+      "ramMbMin": 512,
+      "ramMbRecommended": 1024,
+      "cpuCores": 1,
+      "diskGb": null
+    },
+    "category": "starter",
+    "categoryFa": "پایه (کوچک)",
+    "liaraPlan": null,
+    "labelFa": "راهنمای اولیهٔ منابع (تأییدنشده)",
+    "pricingFa": "نام پلن‌ها و قیمت فعلی نمایش داده نمی‌شود: فهرست پلن‌های حساب هنوز با پاسخ زندهٔ لیارا تأیید نشده و واحد قیمت مشخص نیست. این فقط «راهنمای اولیهٔ منابع» است، نه قیمت یا پیشنهاد پلن.",
+    "reasoning": [
+      {
+        "factor": "framework",
+        "evidence": "router=app, output=server",
+        "effectFa": "یک پردازش Node.js دائمی نیاز است."
+      },
+      {
+        "factor": "traffic",
+        "evidence": "unknown",
+        "effectFa": "ترافیک نامشخص است؛ فرض محافظه‌کارانه و کم‌ترافیک."
+      }
+    ],
+    "missingInformationFa": [
+      "ترافیک مورد انتظار (کم/متوسط/زیاد) مشخص نیست.",
+      "نیاز واقعی به حافظه و CPU فقط با ساخت و اجرای واقعی و مشاهدهٔ متریک‌ها مشخص می‌شود."
+    ],
+    "tradeoffsFa": [
+      "مرحلهٔ ساخت Next.js ممکن است از اجرای عادی حافظهٔ بیشتری بخواهد؛ اگر ساخت با کمبود حافظه شکست خورد، پلن بزرگ‌تر لازم است."
+    ],
+    "manualStepsFa": [
+      "شارژ حساب و خرید یا ارتقای پلن فقط دستی و به عهدهٔ شماست؛ این ابزار هیچ هزینه‌ای ایجاد نمی‌کند."
+    ],
+    "catalogueUsed": false
+  },
+  "build": {
+    "platform": "next",
+    "port": 3000,
+    "build": "npm run build",
+    "start": "npm start"
+  },
+  "requiredEnvKeys": [],
+  "blockers": [
+    "live_deployment_intentionally_disabled",
+    "previous_operation_needs_local_operator_resolution",
+    "fresh_live_identity_and_release_baseline_not_checked",
+    "fresh_single_use_approval_absent"
+  ],
+  "networkAttempts": 0
+}

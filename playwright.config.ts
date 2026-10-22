@@ -34,7 +34,8 @@ export default defineConfig({
   },
   projects: [{ name: "chrome", use: { ...devices["Desktop Chrome"], channel: "chrome" } }],
   webServer: {
-    command: `npx next build && npx next start -p ${PORT}`,
+    // the seed step writes the state of a real incident (an operation stuck in NEEDS_OPERATOR_REVIEW, owned by a login that no longer exists) into the throw-away e2e database
+    command: `npx next build && npx tsx --conditions=react-server tests/e2e/seed-locked-operation.ts && npx next start -p ${PORT}`,
     url: `http://localhost:${PORT}/api/health`,
     reuseExistingServer: false,
     timeout: 240_000,

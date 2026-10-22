@@ -1,0 +1,28 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- CommonJS preload for Node's --require option. */
+// Defence in depth for local preview/e2e Node processes: only loopback TCP and local IPC.
+const fs = require("node:fs");
+const net = require("node:net");
+const tls = require("node:tls");
+const { syncBuiltinESMExports } = require("node:module");
+const allowed = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+function refuse(host) {
+  fs.appendFileSync(__dirname + "/egress-blocked.log", String(host).slice(0, 160) + "\n");
+  throw new Error("External networking disabled in offline verification");
+}
+const connect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  let opts = Array.isArray(args[0]) ? args[0][0] : args[0];
+  if (opts && typeof opts === "object") {
+    if (!opts.path && !allowed.has(opts.host || opts.hostname || "localhost")) refuse(opts.host || opts.hostname);
+  } else if (typeof opts === "number" && typeof args[1] === "string" && !allowed.has(args[1])) refuse(args[1]);
+  else if (typeof opts === "string" && !opts.startsWith("/") && !opts.startsWith("\\\\")) refuse("unknown-socket-target");
+  return connect.apply(this, args);
+};
+tls.connect = () => refuse("tls");
+const fetch = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (!allowed.has(url.hostname)) refuse(url.hostname);
+  return fetch(input, init);
+};
+syncBuiltinESMExports();

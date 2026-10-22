@@ -35,6 +35,28 @@ async function deployExisting(h: H, backend: "api" | "cli") {
 }
 const ops = (f: FakeLiara) => f.calls.map((c) => c.op);
 
+describe("existing application: a 2xx upload answer whose sourceID cannot be read (the first real attempt)", () => {
+  it("ends in review with the evidence kept; nothing is retried, no release is attempted, the app stays untouched, and the old release is still the baseline", async () => {
+    const { h } = await setup("api");
+    h.fake.upload = "malformed";
+    const { final } = await deployExisting(h, "api");
+    expect(final.state).toBe("NEEDS_OPERATOR_REVIEW");
+    expect(final.failure).toMatchObject({ code: "malformed_response", step: "upload_source" });
+    expect(final.remote).toMatchObject({ appConfirmed: true, sourceId: null, releaseId: null });
+    expect(final.steps.find((s) => s.name === "upload_source")).toMatchObject({ status: "unknown", outcome: "malformed_response" });
+    expect(ops(h.fake)).toEqual(["uploadSource"]); // no createApp, no createRelease, no second upload
+    expect(h.fake.releaseIds).toEqual(["rel_old_1"]); // zero new releases: the console shows exactly what it showed before
+    const row = (await h.store.readAudit(500)).find((r) => r.event === "live.operation_needs_review");
+    expect(JSON.parse(row!.data)).toMatchObject({ httpStatus: 200, shape: { body: "json", expected: { key: "sourceID", present: true } } });
+    expect(final.recoveryFa.join(" ")).toMatch(/۲xx.*sourceID|sourceID.*۲xx/);
+    // the sanitised shape carries no value
+    expect(row!.data).not.toMatch(/src_0001_demo/);
+    // abandoning releases the (team, app) slot so a fresh, separately approved operation can follow — the tool itself never starts one
+    await h.svc.resolve(final.id, OWNER, "abandon");
+    expect(ops(h.fake)).toEqual(["uploadSource"]);
+  });
+});
+
 describe("deploy to an EXISTING application — REST backend (recording fake transport)", () => {
   it("proposal binds the existing app's real identity; no create request is ever sent; DEPLOYED only after full verification", async () => {
     const { h } = await setup("api");

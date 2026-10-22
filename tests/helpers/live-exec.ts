@@ -132,7 +132,7 @@ export class FakeLiara {
         case "rejected_413": return rej(413, "payload_too_large");
         case "rejected_400": return rej(400, "bad_request");
         case "timeout": return unk("timeout");
-        case "malformed": return unk("malformed_response", 200);
+        case "malformed": return { ok: false, kind: "unknown_outcome", status: 200, code: "malformed_response", shape: { status: 200, contentType: "application/json", bytes: 41, body: "json", lead: "object", keys: [{ name: "sourceID", type: "string", length: 36, format: "has_space" }], expected: { key: "sourceID", present: true, type: "string", length: 36, format: "has_space" } } };
       }
     },
     createRelease: async (app: string, req: CreateReleaseRequest) => {

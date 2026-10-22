@@ -1,0 +1,51 @@
+{
+  "observedAt": "2026-10-22T19:47:02.158295+00:00",
+  "readOnly": true,
+  "operationId": "lop_20261022184638_3db4352a",
+  "state": "NEEDS_OPERATOR_REVIEW",
+  "active": true,
+  "updatedAt": "2026-10-22T18:48:18.989Z",
+  "failureCode": "malformed_response",
+  "hasSourceId": false,
+  "hasReleaseId": false,
+  "proposal": {
+    "id": "lprop_20261022184638_0aead922",
+    "status": "CONSUMED",
+    "expiresAt": "2026-10-22T18:56:38.149Z"
+  },
+  "artifactMatchesPreviousProposal": {
+    "zipSha256": true,
+    "analysisDigest": true,
+    "artifactDigest": true
+  },
+  "auditEvents": [
+    {
+      "at": "2026-10-22T18:46:38.157Z",
+      "event": "live.proposal_created"
+    },
+    {
+      "at": "2026-10-22T18:48:09.902Z",
+      "event": "live.proposal_approved"
+    },
+    {
+      "at": "2026-10-22T18:48:16.729Z",
+      "event": "live.execution_claimed"
+    },
+    {
+      "at": "2026-10-22T18:48:18.348Z",
+      "event": "live.existing_app_verified"
+    },
+    {
+      "at": "2026-10-22T18:48:18.527Z",
+      "event": "live.upload_attempt"
+    },
+    {
+      "at": "2026-10-22T18:48:18.992Z",
+      "event": "live.operation_needs_review"
+    },
+    {
+      "at": "2026-10-22T18:53:35.226Z",
+      "event": "live.operation_reverify"
+    }
+  ]
+}

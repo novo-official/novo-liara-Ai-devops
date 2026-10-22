@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,8 +16,32 @@ const files = (dir = ROOT, rel = ""): string[] => readdirSync(dir).flatMap((n) =
 describe("demo fixture: minimal, deterministic, safe to deploy later (never deployed in this phase)", () => {
   const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")) as { dependencies: Record<string, string>; devDependencies?: unknown; scripts: Record<string, string> };
   it("is only the minimal Next.js files: no database, no background jobs, no env files, no keys, no docker/liara config", () => {
-    expect(files()).toEqual([".gitignore", "README.md", "app/health/route.js", "app/layout.js", "app/page.js", "next.config.js", "package-lock.json", "package.json"]);
+    expect(files()).toEqual([".gitignore", "README.md", "app/health/route.js", "app/layout.js", "app/page.js", "next.config.js", "package-lock.json", "package.json", "public/robots.txt"]);
     for (const f of files()) expect(f, f).not.toMatch(/^\.env|\.pem$|\.key$|id_rsa|credentials|liara\.json|Dockerfile|docker-compose|\.npmrc/i);
+  });
+  it("has a real public/ directory with a harmless static file (Liara's Next.js build runs `COPY app/public`, which fails when the directory does not exist)", async () => {
+    expect(statSync(path.join(ROOT, "public")).isDirectory()).toBe(true);
+    expect(files().filter((f) => f.startsWith("public/"))).toEqual(["public/robots.txt"]);
+    expect(readFileSync(path.join(ROOT, "public/robots.txt"), "utf8")).toBe("User-agent: *\nDisallow: /\n");
+    // the ZIP the operator uploads …
+    const names = await withProject(demoZip(), (t) => [...t.files].sort());
+    expect(names).toContain("public/robots.txt");
+    expect(names).toHaveLength(9);
+    // … and the tar.gz that is actually sent to Liara both carry it, at the archive root, with identical bytes
+    const art = await buildDeploymentArtifact(demoZip(), { now: () => 0 });
+    expect(art.paths).toContain("public/robots.txt");
+    expect(art.fileCount).toBe(9);
+    const tar = gunzipSync(art.bytes);
+    const entries: Record<string, Buffer> = {};
+    for (let off = 0; off + 512 <= tar.length && tar[off] !== 0; ) {
+      const name = tar.subarray(off, off + 100).toString("utf8").replace(/\0.*$/s, "");
+      const size = parseInt(tar.subarray(off + 124, off + 136).toString("utf8").replace(/\0.*$/s, "").trim() || "0", 8);
+      entries[name] = tar.subarray(off + 512, off + 512 + size);
+      off += 512 + Math.ceil(size / 512) * 512;
+    }
+    expect(Object.keys(entries).sort()).toEqual(art.paths.slice().sort());
+    expect(entries["public/robots.txt"]!.toString("utf8")).toBe("User-agent: *\nDisallow: /\n");
+    expect(Object.keys(entries).every((n) => !n.startsWith("/") && !n.startsWith("./") && !n.includes(".."))).toBe(true);
   });
   it("depends on exactly next, react, react-dom (no database client, queue, SDK or paid service)", () => {
     expect(Object.keys(pkg.dependencies).sort()).toEqual(["next", "react", "react-dom"]);
@@ -54,6 +79,11 @@ describe("demo fixture: minimal, deterministic, safe to deploy later (never depl
     expect(await safeProbe({ appName: "liara-agent-demo", suffixes: ["liara.run"], path: "/health", marker: "liara-agent-demo", ...ok })).toEqual({ outcome: "ok", status: 200, markerFound: true });
     expect(await safeProbe({ appName: "liara-agent-demo", suffixes: ["liara.run"], path: "/health", marker: "some-other-app", ...ok })).toEqual({ outcome: "ok", status: 200, markerFound: false });
     expect(body.length).toBeLessThan(4096); // within the probe's inspected window
+  });
+  it("when dist-demo/liara-agent-demo.zip exists it is the CURRENT fixture (a stale ZIP would be uploaded without public/)", () => {
+    const zipPath = path.resolve(ROOT, "../../dist-demo/liara-agent-demo.zip");
+    if (!existsSync(zipPath)) return; // dist-demo is a git-ignored build output
+    expect(createHash("sha256").update(readFileSync(zipPath)).digest("hex")).toBe(createHash("sha256").update(demoZip()).digest("hex"));
   });
   it("the marker is allowed by the configuration validator", async () => {
     const { makeConfig } = await import("../helpers/live");

@@ -1,0 +1,18 @@
+{
+  "checkedPackageVersionPairs": 531,
+  "method": "GET only",
+  "findings": [
+    {
+      "id": "GHSA-vfj7-8cjw-p6xm",
+      "severity": "high",
+      "name": "braces",
+      "version": "3.0.3",
+      "path": "node_modules/braces",
+      "lock": "package-lock.json",
+      "dev": true,
+      "patched": null,
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm"
+    }
+  ],
+  "productionAffected": 0
+}

@@ -1,0 +1,13 @@
+{
+  "reason": "Port 3101 used by another process; it was not reused or stopped",
+  "port": 3131,
+  "changes": "Only localhost URL port literals and config PORT in an isolated browser-test copy",
+  "files": [
+    "deploy.spec.ts",
+    "agent.spec.ts",
+    "assistant.spec.ts",
+    "dashboard.spec.ts"
+  ],
+  "mainProjectTestsUnmodified": true,
+  "path": "/tmp/liara-e2e-isolated-ybw0iyi0"
+}

@@ -18,6 +18,7 @@ import {
 } from "./contract";
 import { APP_NAME_REGEX } from "../config/env";
 import { MAX_ARTIFACT_BYTES } from "./artifact";
+import { describeResponse, safeContentType, type ResponseMeta } from "./response-shape";
 
 /**
  * THE ONLY CODE IN THIS PROJECT THAT CAN SEND A WRITE REQUEST (static scans enforce that the string `"POST"` appears nowhere else in `src/`).
@@ -69,7 +70,8 @@ export class LiaraWriteClient implements LiveWriteTransport {
     const r = await this.#send("uploadSource", `/v2/projects/${encodeURIComponent(app)}/sources`, { form }, this.#o.uploadTimeoutMs);
     if (!r.ok) return r;
     const parsed = UploadSourceResponseSchema.safeParse(r.json);
-    return parsed.success ? { ok: true, status: r.status, data: parsed.data } : { ok: false, kind: "unknown_outcome", status: r.status, code: "malformed_response" };
+    if (parsed.success) return { ok: true, status: r.status, data: parsed.data };
+    return this.#unreadable("uploadSource", r.meta, r.json, "sourceID");
   }
 
   async createRelease(app: string, req: CreateReleaseRequest): Promise<WriteResult<CreateReleaseResponse>> {
@@ -78,10 +80,18 @@ export class LiaraWriteClient implements LiveWriteTransport {
     const r = await this.#send("createRelease", `/v2/projects/${encodeURIComponent(app)}/releases`, { json: body }, this.#o.timeoutMs);
     if (!r.ok) return r;
     const parsed = CreateReleaseResponseSchema.safeParse(r.json);
-    return parsed.success ? { ok: true, status: r.status, data: parsed.data } : { ok: false, kind: "unknown_outcome", status: r.status, code: "malformed_response" };
+    if (parsed.success) return { ok: true, status: r.status, data: parsed.data };
+    return this.#unreadable("createRelease", r.meta, r.json, "releaseID");
   }
 
-  async #send(op: "createApp" | "uploadSource" | "createRelease", path: string, payload: { json?: unknown; form?: FormData }, timeoutMs: number): Promise<{ ok: true; status: number; json: unknown } | Extract<WriteResult<never>, { ok: false }>> {
+  /** A 2xx whose body could not be used: the request WAS accepted, so the outcome is unknown (never retried) — but the evidence is kept (shape only, never values). */
+  #unreadable(op: string, meta: ResponseMeta, json: unknown, expectedKey: string): Extract<WriteResult<never>, { ok: false }> {
+    const shape = describeResponse(meta, json, expectedKey);
+    log("warn", "liara.write_unreadable", { op, shape });
+    return { ok: false, kind: "unknown_outcome", status: meta.status, code: "malformed_response", shape };
+  }
+
+  async #send(op: "createApp" | "uploadSource" | "createRelease", path: string, payload: { json?: unknown; form?: FormData }, timeoutMs: number): Promise<{ ok: true; status: number; json: unknown; meta: ResponseMeta } | Extract<WriteResult<never>, { ok: false }>> {
     const url = new URL(path, this.#o.baseUrl);
     if (this.#o.teamId) url.searchParams.set("teamID", this.#o.teamId);
     if (url.origin !== this.#o.baseUrl.origin || !TRUSTED_LIARA_HOSTS.includes(url.hostname)) throw new Error("untrusted write origin");
@@ -110,24 +120,32 @@ export class LiaraWriteClient implements LiveWriteTransport {
       return c.kind === "rejected" ? { ok: false, kind: "rejected", status: res.status, code: c.code } : { ok: false, kind: "unknown_outcome", status: res.status, code: c.code };
     }
     // 2xx: read a bounded body (may be empty, per [A])
+    const contentType = safeContentType(res.headers.get("content-type"));
+    const meta = (body: ResponseMeta["body"], bytes: number, firstChar?: string): ResponseMeta => ({ status: res.status, contentType, bytes, body, firstChar });
+    const unreadable = (m: ResponseMeta): Extract<WriteResult<never>, { ok: false }> => this.#unreadable(op, m, undefined, op === "createRelease" ? "releaseID" : "sourceID");
+    let total = 0;
     try {
       const reader = res.body?.getReader();
       const chunks: Uint8Array[] = [];
-      let total = 0;
       for (;;) {
         const part = reader ? await reader.read() : { done: true as const, value: undefined };
         if (part.done) break;
         total += part.value.byteLength;
         if (total > MAX_RESPONSE_BYTES) {
           await reader?.cancel().catch(() => undefined);
-          return { ok: false, kind: "unknown_outcome", status: res.status, code: "malformed_response" };
+          return unreadable(meta("too_large", total));
         }
         chunks.push(part.value);
       }
-      if (total === 0) return { ok: true, status: res.status, json: undefined };
-      return { ok: true, status: res.status, json: JSON.parse(Buffer.concat(chunks).toString("utf8")) };
+      if (total === 0) return { ok: true, status: res.status, json: undefined, meta: meta("empty", 0) };
+      const text = Buffer.concat(chunks).toString("utf8");
+      try {
+        return { ok: true, status: res.status, json: JSON.parse(text), meta: meta("json", total) };
+      } catch {
+        return unreadable(meta("non_json", total, text.trimStart().charAt(0)));
+      }
     } catch {
-      return { ok: false, kind: "unknown_outcome", status: res.status, code: "malformed_response" };
+      return unreadable(meta("non_json", total));
     }
   }
 }

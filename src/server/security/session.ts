@@ -62,6 +62,16 @@ export function getSession(id: string | undefined | null): Session | null {
   return s;
 }
 
+/**
+ * Is any NON-EXPIRED session accepted by `match`? Used to decide whether the owner of a stored record can still act. The raw ids never leave this function's
+ * caller scope (only a boolean does), and nothing here touches `lastSeenAt`.
+ */
+export function hasActiveSession(match: (sessionId: string) => boolean): boolean {
+  const now = clock();
+  for (const [id, sess] of store) if (!isExpired(sess, now) && match(id)) return true;
+  return false;
+}
+
 export function destroySession(id: string | undefined | null): void {
   if (id) store.delete(id);
 }

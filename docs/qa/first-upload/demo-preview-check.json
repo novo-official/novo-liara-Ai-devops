@@ -1,0 +1,89 @@
+{
+  "sizes": [
+    {
+      "width": 360,
+      "scrollWidth": 360
+    },
+    {
+      "width": 768,
+      "scrollWidth": 768
+    },
+    {
+      "width": 1280,
+      "scrollWidth": 1280
+    }
+  ],
+  "health": {
+    "status": "ok",
+    "app": "liara-agent-demo",
+    "version": "1"
+  },
+  "requests": [
+    {
+      "method": "GET",
+      "pathname": "/"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/webpack-70c336f9a46f13b1.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/87c73c54-94dfd33dd614faf8.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/968-cd28e4dfb0c7d4bb.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/main-app-0490669b208b2cd4.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/webpack-70c336f9a46f13b1.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/87c73c54-94dfd33dd614faf8.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/968-cd28e4dfb0c7d4bb.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/main-app-0490669b208b2cd4.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/webpack-70c336f9a46f13b1.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/87c73c54-94dfd33dd614faf8.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/968-cd28e4dfb0c7d4bb.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/_next/static/chunks/main-app-0490669b208b2cd4.js"
+    },
+    {
+      "method": "GET",
+      "pathname": "/health"
+    }
+  ],
+  "externalRequests": 0,
+  "postRequests": 0
+}

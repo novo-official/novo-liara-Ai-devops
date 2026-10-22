@@ -1,0 +1,40 @@
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { canonicalJson } from "../src/server/agent/policy";
+import { withProject } from "../src/server/deploy/workspace";
+import { analyzeSource } from "../src/server/deploy/analyze";
+import { buildReadiness } from "../src/server/deploy/readiness";
+import { recommend } from "../src/server/deploy/recommend";
+import { buildDeploymentArtifact } from "../src/server/live/artifact";
+import { installNetworkGuard, blockedAttempts } from "../tests/helpers/network-guard";
+
+installNetworkGuard();
+const zip = readFileSync("dist-demo/liara-agent-demo.zip");
+const sha256 = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+
+async function main() {
+  const analysis = await withProject(zip, (tree, summary) => analyzeSource(tree, summary));
+  const readiness = buildReadiness(analysis);
+  const artifact = await buildDeploymentArtifact(zip);
+  const again = await buildDeploymentArtifact(zip);
+  if (!artifact.bytes.equals(again.bytes)) throw new Error("nondeterministic artifact");
+  const recommendation = recommend({ analysis });
+  const preview = {
+    generatedAt: new Date().toISOString(),
+    appName: "liara-agent-demo", kind: "deploy_existing_app", backend: "api",
+    mode: "offline", note: "preview_only_not_an_approval", persisted: false,
+    executable: false, target: { checked: false, reason: "offline_no_live_reads" },
+    artifact: { zipSha256: sha256(zip), zipBytes: zip.length, analysisDigest: sha256(canonicalJson(analysis)), artifactDigest: artifact.sha256,
+      bytes: artifact.size, fileCount: artifact.fileCount, paths: artifact.paths, format: artifact.format, excluded: artifact.excluded, deterministic: true },
+    readiness, recommendation,
+    build: { platform: recommendation.approach.platformCandidate, port: analysis.runtime.port ?? 3000, build: analysis.runtime.scripts.build.invocation, start: analysis.runtime.scripts.start.invocation },
+    requiredEnvKeys: analysis.envKeys.filter((key) => key.required).map((key) => key.name),
+    blockers: ["live_deployment_intentionally_disabled", "previous_operation_needs_local_operator_resolution", "fresh_live_identity_and_release_baseline_not_checked", "fresh_single_use_approval_absent"],
+    networkAttempts: blockedAttempts.length,
+  };
+  if (blockedAttempts.length) throw new Error("unexpected network attempt");
+  writeFileSync("verification/offline-preview.json", JSON.stringify(preview, null, 2) + "\n");
+  writeFileSync("verification/source.tar.gz", artifact.bytes);
+  console.log(JSON.stringify({ verdict: readiness.verdict, artifact: preview.artifact, requiredEnvKeys: preview.requiredEnvKeys, executable: false, networkAttempts: 0 }));
+}
+main().catch(() => { console.error("Offline preview failed"); process.exitCode = 1; });

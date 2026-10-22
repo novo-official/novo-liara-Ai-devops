@@ -81,12 +81,12 @@ describe("REST release contract: documented vs CLI-observed fields (pinned OpenA
 });
 
 describe("the trusted demo artifact (fixtures/demo-app → ZIP → tar.gz)", () => {
-  it("is deterministic, small, contains exactly the 8 repository-owned files as regular files, and no secrets, dependencies or build output", async () => {
+  it("is deterministic, small, contains exactly the 9 repository-owned files (including public/robots.txt) as regular files, and no secrets, dependencies or build output", async () => {
     const zip = demoZip();
     const a = await buildDeploymentArtifact(zip);
     const b = await buildDeploymentArtifact(demoZip());
     expect(a.sha256).toBe(b.sha256);
-    expect(a.paths).toEqual([".gitignore", "README.md", "app/health/route.js", "app/layout.js", "app/page.js", "next.config.js", "package-lock.json", "package.json"]);
+    expect(a.paths).toEqual([".gitignore", "README.md", "app/health/route.js", "app/layout.js", "app/page.js", "next.config.js", "package-lock.json", "package.json", "public/robots.txt"]);
     expect(a.excluded).toEqual({ byIgnoreRules: 0, sensitiveNames: [], dependencyEntries: 0 });
     expect(a.size).toBeLessThan(20 * 1024); // limit for the lowest bundle plan is 128 MB
     expect(a.bytes.subarray(0, 2).toString("hex")).toBe("1f8b"); // gzip

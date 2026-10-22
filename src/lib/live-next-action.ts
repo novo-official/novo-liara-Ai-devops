@@ -21,6 +21,10 @@ export interface NextActionInput {
   previewExecutionBlockers: string[];
   proposal: "PENDING" | "APPROVED" | null;
   opState: string | null;
+  /** state of an operation from ANOTHER run that holds the (team, app) slot of the selected target (null = none) */
+  lockState: string | null;
+  /** who may act on it from this session: the owner / a session after the owner's login is gone / nobody (owner still logged in elsewhere) */
+  lockAccess?: "owner" | "orphan" | "other_session";
 }
 
 export type NextActionId =
@@ -29,6 +33,8 @@ export type NextActionId =
   | "review_failure"
   | "execute_approved"
   | "approve_pending"
+  | "resolve_previous"
+  | "locked_elsewhere"
   | "fix_source"
   | "choose_zip"
   | "wait_hash"
@@ -55,6 +61,7 @@ export function nextAction(i: NextActionInput): NextAction {
   if (i.opState === "FAILED" || i.opState === "NEEDS_OPERATOR_REVIEW") return a("review_failure", "blocked");
   if (i.proposal === "APPROVED") return i.artifact === "none" || i.artifact === "mismatch" || i.artifact === "hashing" ? a(i.artifact === "mismatch" ? "fix_zip" : "choose_zip", "blocked") : a("execute_approved", "action");
   if (i.proposal === "PENDING") return a("approve_pending", "action");
+  if (i.lockState) return i.lockAccess === "other_session" ? a("locked_elsewhere", "blocked") : IN_FLIGHT.includes(i.lockState) ? a("wait_in_progress", "wait") : a("resolve_previous", "blocked");
   if (!i.readinessOk || i.runBlockers.length) return a("fix_source", "blocked");
   if (i.artifact === "none") return a("choose_zip", "action");
   if (i.artifact === "hashing") return a("wait_hash", "wait");

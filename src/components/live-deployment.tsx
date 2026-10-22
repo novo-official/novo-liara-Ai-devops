@@ -265,13 +265,15 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
   const open = proposals.find((p) => p.proposal.status === "PENDING" || p.proposal.status === "APPROVED");
   const live = status.mode.kind === "live_enabled";
   const latest = proposals.at(-1);
+  const locks = status.locks ?? [];
+  const lock = locks.find((l) => l.appName === target?.name) ?? null;
   const readinessOk = readiness ? readiness.verdict === "READY" || readiness.verdict === "READY_WITH_WARNINGS" : true;
   const fileOk = artifactUsable(artifact.state);
   const key = previewKey(artifact, target?.name ?? "", backend);
   const freshPreview = preview && preview.key === key ? preview.data : null;
   const previewState: NextActionInput["preview"] = busy === "preview" ? "busy" : freshPreview ? "ok" : preview ? "stale" : "none";
   const canPreview = readinessOk && blockingRun.length === 0 && !!target && fileOk && !open && busy === null;
-  const canPropose = live && !!target?.ready && !!be?.ready && blockingRun.length === 0 && !open && fileOk && !!freshPreview && busy === null;
+  const canPropose = live && !!target?.ready && !!be?.ready && blockingRun.length === 0 && !open && !lock && fileOk && !!freshPreview && busy === null;
   const flow: NextActionInput = {
     mode: status.mode.kind,
     readinessOk,
@@ -287,6 +289,8 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
     previewExecutionBlockers: freshPreview?.executionBlockers ?? [],
     proposal: open ? (open.proposal.status as "PENDING" | "APPROVED") : null,
     opState: latest?.operation?.state ?? null,
+    lockState: lock?.state ?? null,
+    lockAccess: lock?.access,
   };
   const na = nextAction(flow);
   const stageList = stages(flow);
@@ -317,7 +321,7 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
     el?.scrollIntoView({ block: "center" });
     el?.focus();
   };
-  const disabledNote = status.mode.kind === "simulation" ? x.proposeDisabledSim : !live ? x.proposeDisabledOff : !fileOk ? fl.requestDisabledNeedFile : !freshPreview ? fl.requestDisabledNeedPreview : t.stateHelp.BLOCKED;
+  const disabledNote = lock ? fl.requestDisabledLocked : status.mode.kind === "simulation" ? x.proposeDisabledSim : !live ? x.proposeDisabledOff : !fileOk ? fl.requestDisabledNeedFile : !freshPreview ? fl.requestDisabledNeedPreview : t.stateHelp.BLOCKED;
   const prereqs = freshPreview?.prerequisites ?? be?.prerequisites ?? [];
 
   return (
@@ -347,6 +351,20 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
         {(na.id === "choose_zip" || na.id === "fix_zip") && <Button type="button" variant="outline" className="min-h-11 w-fit px-4" onClick={focusBinder} data-testid="live-next-goto-file">{fl.binder.gotoBinder}</Button>}
         {na.id === "run_preview" && <Button type="button" className="min-h-11 w-fit px-4" onClick={() => void runPreview()} disabled={!canPreview} data-testid="live-next-run-preview"><Eye aria-hidden />{fl.preview.button}</Button>}
       </div>
+
+      {locks.length > 0 && (
+        <section aria-labelledby="live-lock-h" className="flex flex-col gap-3 rounded-lg border-2 border-warning p-3" data-testid="live-locks">
+          <h4 id="live-lock-h" className="text-sm font-semibold">{fl.lock.title}</h4>
+          <p className="text-xs leading-6 text-muted-foreground">{fl.lock.help}</p>
+          {locks.map((l) => (
+            <div key={l.operation?.id ?? `${l.appName}-${l.createdAt}`} className="flex flex-col gap-2" data-testid="live-lock" data-op-id={l.operation?.id ?? ""} data-app={l.appName} data-state={l.state} data-access={l.access}>
+              {l.appName !== target?.name && <p className="text-xs text-muted-foreground">{fl.lock.otherApp}</p>}
+              {l.access === "orphan" && <p className="rounded-lg border border-warning/50 bg-warning/5 p-2 text-xs leading-6" data-testid="live-lock-orphan-note">{fl.lock.orphan}</p>}
+              {l.operation ? <OperationView op={l.operation} orphan={l.access === "orphan"} onChanged={onChanged} /> : <p className="rounded-lg border p-2 text-sm leading-7" data-testid="live-lock-elsewhere">{fl.lock.elsewhere(l.appName, t.states_fa[l.state as keyof typeof t.states_fa] ?? l.state)}</p>}
+            </div>
+          ))}
+        </section>
+      )}
 
       <ol aria-label={fl.stagesLabel} className="flex flex-wrap gap-2 text-xs" data-testid="live-existing-stages">
         {stageList.map((st, i) => (
@@ -720,9 +738,24 @@ function LiveProposalCard({ view, artifact, onChanged }: { view: LiveProposalVie
   );
 }
 
-function OperationView({ op, onChanged }: { op: LiveOperationRecord; onChanged: () => void }) {
+/** Second step of "abandon": says exactly what it does (local bookkeeping only) before anything changes. */
+export function AbandonConfirmBox({ opId, busy, disabled, onConfirm, onBack }: { opId: string; busy: boolean; disabled: boolean; onConfirm: () => void; onBack: () => void }) {
+  return (
+    <div role="group" aria-labelledby={`ab-${opId}`} className="mt-3 flex flex-col gap-2 rounded-lg border-2 border-warning p-3" data-testid="live-abandon-confirm-box">
+      <p id={`ab-${opId}`} className="text-sm font-semibold">{t.flow.abandon.confirmTitle}</p>
+      <ul className="list-disc space-y-1 ps-5 text-xs leading-6">{t.flow.abandon.confirmBody.map((x) => <li key={x}>{x}</li>)}</ul>
+      <div className="flex flex-wrap gap-2">
+        <Button className="min-h-11 px-3" disabled={disabled} onClick={onConfirm} data-testid="live-abandon-confirm">{busy ? t.operation.working : t.flow.abandon.confirm}</Button>
+        <Button variant="ghost" className="min-h-11 px-3" disabled={disabled} onClick={onBack} data-testid="live-abandon-back">{t.flow.abandon.back}</Button>
+      </div>
+    </div>
+  );
+}
+
+function OperationView({ op, orphan = false, onChanged }: { op: LiveOperationRecord; orphan?: boolean; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmAbandon, setConfirmAbandon] = useState(false);
   const existingKind = op.kind === "deploy_existing_app";
   const lbl = (st: keyof typeof t.states_fa) => (existingKind ? t.existing.stateLabels[st] : undefined) ?? t.states_fa[st];
   const review = op.state === "NEEDS_OPERATOR_REVIEW";
@@ -730,8 +763,9 @@ function OperationView({ op, onChanged }: { op: LiveOperationRecord; onChanged: 
   async function act(action: "cancel" | "reverify" | "abandon") {
     setBusy(action);
     setError(null);
-    const r = await api(`/api/agent/live/operations/${op.id}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+    const r = await api(`/api/agent/live/operations/${op.id}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...(orphan ? { adoptOrphan: true } : {}) }) });
     setBusy(null);
+    setConfirmAbandon(false);
     if (!r.ok) setError(r.message);
     onChanged();
   }
@@ -783,10 +817,11 @@ function OperationView({ op, onChanged }: { op: LiveOperationRecord; onChanged: 
       {(review || cancellable) && (
         <div className="mt-3 flex flex-wrap gap-2">
           {review && <Button variant="outline" className="min-h-11 px-3" disabled={busy !== null} onClick={() => void act("reverify")} data-testid="live-reverify">{busy === "reverify" ? t.operation.working : t.operation.reverify}</Button>}
-          {review && <Button variant="outline" className="min-h-11 px-3" disabled={busy !== null} onClick={() => void act("abandon")} data-testid="live-abandon">{busy === "abandon" ? t.operation.working : t.operation.abandon}</Button>}
+          {review && <Button variant="outline" className="min-h-11 px-3" disabled={busy !== null} aria-expanded={confirmAbandon} onClick={() => setConfirmAbandon(true)} data-testid="live-abandon">{t.operation.abandon}</Button>}
           {cancellable && <Button variant="outline" className="min-h-11 px-3" disabled={busy !== null} onClick={() => void act("cancel")} data-testid="live-cancel">{busy === "cancel" ? t.operation.working : t.operation.cancel}</Button>}
         </div>
       )}
+      {review && confirmAbandon && <AbandonConfirmBox opId={op.id} busy={busy === "abandon"} disabled={busy !== null} onConfirm={() => void act("abandon")} onBack={() => setConfirmAbandon(false)} />}
       {error && <p role="alert" className="mt-2 text-sm text-destructive" data-testid="live-op-error">{error}</p>}
     </section>
   );

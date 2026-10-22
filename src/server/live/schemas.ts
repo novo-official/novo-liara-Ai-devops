@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { APP_NAME_REGEX } from "../config/env";
-import { LIVE_PLATFORMS, PLAN_ID } from "./contract";
+import { LIVE_PLATFORMS, PLAN_ID, VENDOR_ID } from "./contract";
 import { LIVE_STATES } from "./types";
 
 /** Strict schemas for everything the live layer persists. Live records are NEVER passed through the generic text sanitiser (it would pseudonymise ids and
@@ -78,7 +78,8 @@ export const LiveOperationSchema = z
     createdAt: ISO,
     updatedAt: ISO,
     steps: z.array(Step).max(4),
-    remote: z.object({ appConfirmed: z.boolean().nullable(), sourceId: ID.nullable(), releaseId: ID.nullable() }).strict(),
+    // ids RETURNED by Liara are opaque strings (see VENDOR_ID): the strict project-id pattern here would make persisting a SUCCESSFUL upload throw
+    remote: z.object({ appConfirmed: z.boolean().nullable(), sourceId: z.string().regex(VENDOR_ID).nullable(), releaseId: z.string().regex(VENDOR_ID).nullable() }).strict(),
     ladder: z.object({ apiAcceptedRequest: Level, sourceUploaded: Level, releaseCreated: Level, buildCompleted: Level, runtimeStarted: Level, httpHealthVerified: Level }).strict(),
     failure: z.object({ code: z.string().max(60), step: z.enum(["create_application", "upload_source", "create_release", "verify_deployment", "preflight", "approval"]), messageFa: z.string().max(400) }).strict().nullable(),
     recoveryFa: z.array(z.string().max(400)).max(12),

@@ -45,7 +45,9 @@ By setting it **you** state that you read the official CLI source and accept tha
 | Ignore rules | defaults + one ignore file per directory (`.liaraignore` > `.dockerignore` > `.gitignore`) | same rules, **plus** never packaging `.env*`, keys, credentials | ours is stricter |
 | Size limit | 256 MiB client check | 128 MiB (lowest bundle) | ours is stricter |
 
-## 5. The trusted demo artifact (verified offline on 2026-10-22)
+## 5. The trusted demo artifact (verified offline on 2026-10-22; **superseded 2026-10-23**)
+
+> **Superseded.** The first real Liara build failed with `COPY failed: stat app/public: file does not exist`: Liara's Next.js build copies `app/public`, which requires a real `public/` directory. The fixture now ships `public/robots.txt` (9 files). Current values (re-derive them yourself at proposal time): ZIP 9 068 bytes `b94c529a9463a4551375eb0d70dc197193dbc9a3053cb4226c80fd516fcc56db`; analysis `12f9525e2fad06a4ff48e3c76ff297ed49932b5f7c184523ad4817867a43b955`; artifact tar.gz 8 319 bytes `cb9ed3d726bcd9f8feca07c5cc189ea4fb580fea19147a1475079dc94c0907f7`. The 8-file digests below are kept only as history of the failed first attempt.
 
 * `npm run demo:zip` → `dist-demo/liara-agent-demo.zip` — 8 files, 8 801 bytes, SHA-256 `80e5288707b83a3e411ff2ea4d544e4c8cde899727665feaceb4334864f26249` (deterministic; re-derive it yourself at proposal time, never trust this value blindly).
 * Generated artifact: tar.gz, **8 067 bytes**, SHA-256 `a26e1dde0009df7cdf8003680f7ef24a234448b9ac73eca8d7cce4eef6fbaf81`, byte-identical across runs; 8 regular files: `.gitignore`, `README.md`, `app/health/route.js`, `app/layout.js`, `app/page.js`, `next.config.js`, `package-lock.json`, `package.json`. Nothing excluded because nothing unsafe exists in the fixture; no `.env*`, keys, `node_modules`, `.next`, `liara.json`, Dockerfile. The only "secret-like" words in it are the sentence "no secrets" in `README.md`/`package.json` descriptions.

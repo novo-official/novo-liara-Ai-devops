@@ -22,7 +22,8 @@ import type { PlanProjection } from "../liara/plans";
 import { safeProbe, type ProbeResult } from "./probe";
 import type { LiveReader } from "./reader";
 import type { LiveStore } from "./store";
-import { EMPTY_LADDER, LiveError, LIVE_TERMINAL, type LiveApprovalRecord, type LiveOperationRecord, type LiveProposal, type LiveProposalContent, type LiveState } from "./types";
+import { isActiveOperation, teamKey } from "./store";
+import { EMPTY_LADDER, LiveError, LIVE_STATES, LIVE_TERMINAL, type LiveApprovalRecord, type LiveOperationRecord, type LiveProposal, type LiveProposalContent, type LiveState } from "./types";
 
 /**
  * LiveDeploymentService — proposals, decisions, execution start, recovery for REAL deployments. It reuses the architecture of the Phase 1D/1E approval engine
@@ -53,6 +54,12 @@ export interface LiveServiceOptions {
   sleep?: (ms: number) => Promise<void>;
   executor?: Partial<ExecutorConfig>;
   probe?: (o: { appName: string; path: string; marker?: string }) => Promise<ProbeResult>;
+  /**
+   * Is a login session that maps to this owner hash still alive? Ownership is bound to the (in-memory) login session, so after a restart or a new login the
+   * previous owner can never act again. When it is NOT active, another authenticated session may CLOSE (never approve or execute) that owner's operation —
+   * see `recoveryAccess`. Absent ⇒ every owner is treated as active ⇒ strict owner-only (the safe default for tests and tooling).
+   */
+  isOwnerActive?: (ownerHash: string) => boolean;
 }
 
 export interface LiveProposalView {
@@ -148,7 +155,7 @@ export class LiveDeploymentService {
     const prerequisites = this.prerequisites();
     const g0 = this.gate();
     const mode: LiveModeInfo = { kind: this.o.cfg.dataSource !== "live" ? "simulation" : g0.enabled ? "live_enabled" : "live_disabled", dataSource: this.o.cfg.dataSource, liveFlag: this.o.cfg.live.enabled, writePathReady: g0.enabled };
-    const out: LiveStatus = { uiState: "BLOCKED", prerequisites, runBlockers: [], catalogue: null, minRamMb: null, proposals: [], preflight: null, mode, existing: null };
+    const out: LiveStatus = { uiState: "BLOCKED", prerequisites, runBlockers: [], catalogue: null, minRamMb: null, proposals: [], preflight: null, mode, existing: null, locks: [] };
     if (!runId) return out;
     const run = await this.ownedRun(runId, sessionId);
     const d = run.deployment!;
@@ -163,6 +170,7 @@ export class LiveDeploymentService {
       ? { source: this.o.cfg.dataSource === "live" ? "live" : "simulated", unitsVerified: this.o.cfg.live.planUnits !== null, candidates: listCandidates(cat.data, this.o.cfg.live.planUnits, rec.resources.ramMbMin), notes: ["سازگاری پلن با پلتفرم در API مشخص نیست.", ...(this.o.cfg.live.planUnits ? [] : ["واحدها تأیید نشده؛ بدون تأیید اپراتور، نه هزینه نمایش داده می‌شود و نه ساخت مجاز است."])] }
       : { source: "unavailable", unitsVerified: false, candidates: [], notes: ["فهرست پلن‌ها خوانده نشد."] };
     out.proposals = await this.listForRun(runId, sessionId);
+    out.locks = await this.lockingOperations(sessionId, runId);
     const open = out.proposals.find((v) => v.proposal.status === "PENDING" || v.proposal.status === "APPROVED")?.proposal ?? null;
     const flying = out.proposals.some((v) => v.operation && IN_FLIGHT.includes(v.operation.state));
     if (!flying) out.preflight = await this.cachedPreflight(runId, open ? { planId: open.planId, bundlePlanId: open.bundlePlanId, appName: open.appName, minRamMb: rec.resources.ramMbMin } : null, out.runBlockers, cat.ok ? cat.data : null);
@@ -190,6 +198,38 @@ export class LiveDeploymentService {
       out.existing.uiState = eo && IN_FLIGHT.includes(eo.state) ? "LIVE_IN_PROGRESS" : eo?.state === "DEPLOYED" ? "LIVE_VERIFIED" : eo && (eo.state === "FAILED" || eo.state === "NEEDS_OPERATOR_REVIEW") ? "LIVE_FAILED" : !anyReady ? (mode.kind === "simulation" ? "SIMULATED" : "BLOCKED") : "READY_FOR_APPROVAL";
     }
     return out;
+  }
+
+  /**
+   * How may THIS session act on an operation's RECOVERY controls (re-verify / abandon / cancel)?
+   *  - "owner": the session that created it.
+   *  - "orphan": the owner's login session no longer exists (restart / expiry / new login), so nobody can ever act on it again. A different authenticated session
+   *    of the same deployment and team may close it — explicitly (`adoptOrphan`), audited with both actor hashes. Approving or executing is NEVER transferred.
+   *  - "other_session": its owner is still logged in elsewhere: the operation is shown (state only) but cannot be touched from here.
+   */
+  private recoveryAccess(op: LiveOperationRecord, sessionId: string): "owner" | "orphan" | "other_session" {
+    if (op.ownerHash === ownerHashOf(sessionId)) return "owner";
+    if (teamKey(op.teamId) !== teamKey(this.o.cfg.liara.teamId)) return "other_session"; // never across teams
+    return this.o.isOwnerActive && !this.o.isOwnerActive(op.ownerHash) ? "orphan" : "other_session";
+  }
+
+  /**
+   * Operations on this team that still hold a (team, app) slot but belong to ANOTHER run (typically: the page was reloaded or a new ZIP was analysed after an
+   * earlier attempt ended in NEEDS_OPERATOR_REVIEW — and, because ownership follows the login session, usually under an older login). The store's lock is per
+   * (team, app), not per run or session, so without this list the new run showed nothing yet every new proposal was refused as "already started", and the
+   * recovery buttons were unreachable. Read-only. An operation owned by another LIVE session is reported as a stub (state only, no id, no actions).
+   */
+  private async lockingOperations(sessionId: string, runId: string): Promise<LockView[]> {
+    const all = await this.o.store.listOperationsInStates(LIVE_STATES);
+    const out: LockView[] = [];
+    for (const op of all) {
+      if (teamKey(op.teamId) !== teamKey(this.o.cfg.liara.teamId) || !isActiveOperation(op)) continue;
+      const p = await this.o.store.getLiveProposal(op.proposalId);
+      if (p?.runId === runId) continue; // already shown with its own run's proposals
+      const access = this.recoveryAccess(op, sessionId);
+      out.push({ access, appName: op.appName, state: op.state, createdAt: op.createdAt, operation: access === "other_session" ? null : op });
+    }
+    return out.sort((x, y) => x.createdAt.localeCompare(y.createdAt));
   }
 
   private exCache = new Map<string, { at: number; value: ExistingStatus }>();
@@ -767,21 +807,36 @@ export class LiveDeploymentService {
     return op;
   }
 
+  /** Owner, or — only for recovery controls and only with explicit `adoptOrphan` — a session acting on an operation whose owner session is gone. Never for approve/execute. */
+  private async operationForRecovery(opId: string, sessionId: string, adoptOrphan: boolean, action: string): Promise<LiveOperationRecord> {
+    const op = await this.o.store.getOperation(opId);
+    if (!op) throw new LiveError("live_not_found");
+    const access = this.recoveryAccess(op, sessionId);
+    if (access === "owner") return op;
+    if (access === "orphan" && adoptOrphan) {
+      await this.audit(null, "operation_recovery_by_other_session", { operationId: op.id, action, actor: shortHash(sessionId), previousOwner: op.ownerHash.slice(0, 8), state: op.state });
+      return op;
+    }
+    throw new LiveError("live_not_found"); // fail closed: indistinguishable from "does not exist"
+  }
+
   /** Cancellation is only possible BEFORE anything remote has been attempted. */
-  async cancel(opId: string, sessionId: string): Promise<LiveOperationRecord> {
-    const op = await this.getOperation(opId, sessionId);
+  async cancel(opId: string, sessionId: string, adoptOrphan = false): Promise<LiveOperationRecord> {
+    const op = await this.operationForRecovery(opId, sessionId, adoptOrphan, "cancel");
     if (op.state !== "AWAITING_LIVE_APPROVAL" && op.state !== "APPROVED") throw new LiveError("live_invalid_state", [op.state]);
     const nowIso = this.iso();
     const next = { ...op, state: "CANCELLED" as const, updatedAt: nowIso, transitions: [...op.transitions, { at: nowIso, from: op.state, to: "CANCELLED" as const, note: "cancelled_by_operator" }] };
     if (!(await this.o.store.updateOperation(next, op.state))) throw new LiveError("live_invalid_state", ["raced"]);
-    await this.audit(null, "operation_cancelled", { operationId: opId, actor: shortHash(sessionId) });
+    // a PENDING proposal would otherwise keep blocking new proposals for this (team, app) until it expires; the record itself is kept (status CANCELLED)
+    const t = await this.o.store.transitionLiveProposal(op.proposalId, "CANCELLED", nowIso);
+    await this.audit(null, "operation_cancelled", { operationId: opId, actor: shortHash(sessionId), proposalClosed: t.changed });
     return next;
   }
 
   /** The explicit recovery workflow for NEEDS_OPERATOR_REVIEW: re-verify (read-only) or abandon (the remote resources are KEPT; nothing is deleted). */
-  async resolve(opId: string, sessionId: string, action: "reverify" | "abandon"): Promise<LiveOperationRecord> {
+  async resolve(opId: string, sessionId: string, action: "reverify" | "abandon", adoptOrphan = false): Promise<LiveOperationRecord> {
     await this.recovered;
-    const op = await this.getOperation(opId, sessionId);
+    const op = await this.operationForRecovery(opId, sessionId, adoptOrphan, action);
     if (op.state !== "NEEDS_OPERATOR_REVIEW") throw new LiveError("live_invalid_state", [op.state]);
     if (action === "reverify") {
       if (!this.executor) throw new LiveError("live_execution_disabled");
@@ -860,6 +915,15 @@ export interface ExistingPreview {
   note: "preview_only_not_an_approval";
 }
 
+export interface LockView {
+  access: "owner" | "orphan" | "other_session";
+  appName: string;
+  state: LiveState;
+  createdAt: string;
+  /** null for "other_session": the full record (and its id) is never handed to a session that does not own it */
+  operation: LiveOperationRecord | null;
+}
+
 export interface LiveStatus {
   uiState: LiveUiState;
   prerequisites: Prerequisite[];
@@ -873,6 +937,8 @@ export interface LiveStatus {
   /** Phase 2E */
   mode: LiveModeInfo;
   existing: ExistingStatus | null;
+  /** operations from other runs that still hold a (team, app) slot — the operator can resolve them from any run */
+  locks: LockView[];
 }
 
 const IN_FLIGHT: readonly LiveState[] = ["APPROVED", "CREATING_APPLICATION", "APPLICATION_CREATED", "UPLOADING_SOURCE", "SOURCE_UPLOADED", "CREATING_RELEASE", "RELEASE_CREATED", "VERIFYING_DEPLOYMENT"];

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { APP_NAME_REGEX } from "../config/env";
+import type { ResponseShape } from "./response-shape";
 
 /**
  * THE WRITE CONTRACT — exactly three typed operations, validated with strict zod schemas. There is no generic request type anywhere in `live/`.
@@ -16,6 +17,15 @@ import { APP_NAME_REGEX } from "../config/env";
 
 export const PLAN_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,59}$/;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
+/**
+ * Identifiers RETURNED by Liara (`sourceID`, `releaseID`). The OpenAPI only says `type: string` and the official CLI performs NO validation at all (it forwards
+ * `response.sourceID` verbatim), so no format may be invented: the first real upload ended "unknown" with a 2xx answer whose `sourceID` this project had refused to
+ * read. Local acceptance policy: 1–256 printable ASCII characters without whitespace, quotes or backslash. This defensive bound is NOT specified by Liara and is
+ * a subset of the documented string type, not a guarantee of accepting every vendor string. Unsupported strings keep an unknown outcome and are never retried.
+ * The value is only ever re-sent to Liara as a JSON string, rendered
+ * escaped and passed through the redaction layer; it is never put in a path, a shell or an HTML attribute.
+ */
+export const VENDOR_ID = /^[\x21\x23-\x26\x28-\x5b\x5d-\x7e]{1,256}$/;
 
 /** Platforms the live executor can deploy (ids as observed in the CLI's AVAILABLE_PLATFORMS; unverified live). */
 export const LIVE_PLATFORMS = ["next", "static"] as const;
@@ -37,7 +47,7 @@ export const CreateAppRequestSchema = z
 export type CreateAppRequest = z.infer<typeof CreateAppRequestSchema>;
 
 export const UploadSourceRequestSchema = z.object({ app: z.string().regex(APP_NAME_REGEX), filename: z.literal("source.tar.gz") }).strict();
-export const UploadSourceResponseSchema = z.object({ sourceID: z.string().regex(OPAQUE_ID) });
+export const UploadSourceResponseSchema = z.object({ sourceID: z.string().regex(VENDOR_ID) });
 export type UploadSourceResponse = z.infer<typeof UploadSourceResponseSchema>;
 
 export const GitInfoNonRepoSchema = z
@@ -47,7 +57,7 @@ export const NON_REPO_GIT_INFO: z.infer<typeof GitInfoNonRepoSchema> = { branch:
 
 export const CreateReleaseRequestSchema = z
   .object({
-    sourceID: z.string().regex(OPAQUE_ID),
+    sourceID: z.string().regex(VENDOR_ID),
     port: z.number().int().min(1).max(65535),
     /** [A] "The platform of your app" */
     type: z.enum(LIVE_PLATFORMS),
@@ -65,7 +75,7 @@ export const CreateReleaseRequestSchema = z
   })
   .strict();
 export type CreateReleaseRequest = z.infer<typeof CreateReleaseRequestSchema>;
-export const CreateReleaseResponseSchema = z.object({ releaseID: z.string().regex(OPAQUE_ID) });
+export const CreateReleaseResponseSchema = z.object({ releaseID: z.string().regex(VENDOR_ID) });
 export type CreateReleaseResponse = z.infer<typeof CreateReleaseResponseSchema>;
 
 export type WriteErrorCode =
@@ -89,7 +99,7 @@ export type WriteResult<T> =
   /** the API DEFINITELY did not accept the request (a 4xx other than 408): safe to treat as "nothing happened" */
   | { ok: false; kind: "rejected"; status: number; code: WriteErrorCode }
   /** the outcome is UNKNOWN (timeout, network error, 5xx, redirect, unreadable 2xx): NEVER retried blindly — reconcile remote state first */
-  | { ok: false; kind: "unknown_outcome"; status: number | null; code: WriteErrorCode };
+  | { ok: false; kind: "unknown_outcome"; status: number | null; code: WriteErrorCode; shape?: ResponseShape };
 
 export function classifyStatus(status: number): { kind: "rejected" | "unknown_outcome"; code: WriteErrorCode } {
   if (status === 400) return { kind: "rejected", code: "bad_request" };
