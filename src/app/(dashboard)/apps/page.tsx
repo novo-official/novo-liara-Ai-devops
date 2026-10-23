@@ -8,7 +8,6 @@ import { ModeBadge } from "@/components/mode-badge";
 import { RefreshButton } from "@/components/refresh-button";
 import { SectionError } from "@/components/section-card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fa } from "@/i18n/fa";
 import { faDateTime } from "@/lib/format";
 import { requireSession } from "@/server/auth-dal";
@@ -61,36 +60,43 @@ async function AppsList() {
       )}
 
       {section.ok && section.data.items.length > 0 && (
-        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="apps-list">
+        <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3" data-testid="apps-list">
           {section.data.items.map((app) => (
             <li key={app.name}>
-              <Card className="h-full">
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between gap-2 text-base">
-                    <bdi className="ltr-isolate break-all">{app.name}</bdi>
+              <div className="group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-b from-card/90 via-card/70 to-card/40 p-5 shadow-xs backdrop-blur-md transition-all duration-300 hover:border-primary/40 hover:shadow-md hover:shadow-primary/5 hover:-translate-y-1">
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-start justify-between gap-2 border-b border-border/40 pb-3">
+                    <div className="flex flex-col">
+                      <bdi className="ltr-isolate text-base font-bold tracking-tight text-foreground break-all group-hover:text-primary transition-colors">
+                        {app.name}
+                      </bdi>
+                      <span className="text-xs text-muted-foreground/80 mt-0.5">
+                        {app.platform ?? fa.apps.unknown}
+                      </span>
+                    </div>
                     <ModeBadge mode={section.meta.mode} />
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-3">
-                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-                    <dt className="text-muted-foreground">{fa.apps.platform}</dt>
-                    <dd className="ltr-isolate">{app.platform ?? fa.apps.unknown}</dd>
-                    <dt className="text-muted-foreground">{fa.apps.status}</dt>
+                  </div>
+
+                  <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2.5 text-xs sm:text-sm">
+                    <dt className="text-muted-foreground font-medium">{fa.apps.status}</dt>
                     <dd>
                       <StateBadges runtime={app.runtime} rawStatus={app.status} />
                     </dd>
-                    <dt className="text-muted-foreground">{fa.apps.updated}</dt>
-                    <dd>{faDateTime(app.createdAt)}</dd>
+                    <dt className="text-muted-foreground font-medium">{fa.apps.updated}</dt>
+                    <dd className="text-muted-foreground/90 font-mono text-xs">{faDateTime(app.createdAt)}</dd>
                   </dl>
+                </div>
+
+                <div className="mt-5 pt-3 border-t border-border/30">
                   <Link
                     href={`/apps/${encodeURIComponent(app.name)}`}
-                    className="mt-1 inline-flex min-h-11 items-center justify-between rounded-lg border px-3 text-sm font-medium hover:bg-muted"
+                    className="inline-flex w-full min-h-10 items-center justify-between rounded-xl bg-secondary/60 hover:bg-primary border border-border/50 hover:border-primary px-3.5 text-xs sm:text-sm font-semibold text-secondary-foreground hover:text-primary-foreground transition-all duration-200 shadow-xs"
                   >
-                    {fa.apps.open}
-                    <ChevronLeft className="size-4" aria-hidden />
+                    <span>{fa.apps.open}</span>
+                    <ChevronLeft className="size-4 transition-transform group-hover:-translate-x-1" aria-hidden />
                   </Link>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </li>
           ))}
         </ul>

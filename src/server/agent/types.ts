@@ -171,7 +171,7 @@ export interface AgentRunRecord {
   proposalIds: string[];
 }
 
-export type MessageKind = "user" | "ack" | "clarification" | "refusal" | "plan" | "report" | "explanation" | "remediation_review" | "proposal" | "decision" | "simulation" | "system";
+export type MessageKind = "user" | "ack" | "clarification" | "refusal" | "plan" | "report" | "explanation" | "remediation_review" | "proposal" | "decision" | "simulation" | "system" | "ai_answer" | "ai_error";
 export interface ConversationMessage {
   id: string;
   conversationId: string;
@@ -186,6 +186,8 @@ export interface ConversationMessage {
   suggestions?: string[];
   /** UI cue: this message asks the operator to upload a project */
   action?: "upload_project";
+  /** attribution of a REAL model answer (kind ai_answer / ai_error). Absent on every deterministic or simulated message. */
+  ai?: { source: "boxapi"; model?: string; usage?: { promptTokens: number | null; completionTokens: number | null; totalTokens: number | null }; truncated?: boolean; error?: string };
 }
 
 export interface ConversationRecord {

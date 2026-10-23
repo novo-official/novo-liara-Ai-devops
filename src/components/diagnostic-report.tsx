@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, FlaskConical, HelpCircle, Radio, ShieldQuestion } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { ai as aiUi } from "@/i18n/agent-fa";
 import { confidenceHelp } from "@/i18n/diagnostics-fa";
 import { fa } from "@/i18n/fa";
 import { faDateTime } from "@/lib/format";
@@ -211,7 +212,19 @@ export function DiagnosticReportView({ report }: { report: DiagnosticReport }) {
         {report.narrative.status === "ok" && report.narrative.textFa ? (
           <blockquote className="rounded-lg border-s-4 border-warning/60 bg-muted/30 p-3 text-sm leading-7">{report.narrative.textFa}</blockquote>
         ) : null}
-        <p className="mt-1 text-xs text-muted-foreground">{t.narrativeStatus[report.narrative.status] ?? t.narrativeStatus.unavailable}</p>
+        {report.narrative.source === "boxapi" && report.narrative.status === "ok" ? (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="narrative-attribution" data-source="boxapi">
+            {aiUi.narrativeNote}
+            {report.narrative.model && <> · {aiUi.provider.modelLabel}: <bdi className="ltr-isolate font-mono">{report.narrative.model}</bdi></>}
+            {report.narrative.usage?.totalTokens != null && <> · {report.narrative.usage.totalTokens} {aiUi.provider.tokens}</>}
+          </p>
+        ) : report.narrative.source === "boxapi" ? (
+          <p className="mt-1 text-xs text-destructive" data-testid="narrative-attribution" data-source="boxapi" role="status">
+            {aiUi.errors[report.narrative.failure ?? "provider_error"] ?? aiUi.errors.provider_error} {t.narrativeStatus.errorFallback}
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-muted-foreground">{t.narrativeStatus[report.narrative.status] ?? t.narrativeStatus.unavailable}</p>
+        )}
       </div>
 
       <div data-testid="evidence-details">

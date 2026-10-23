@@ -1,4 +1,5 @@
 import { apiError, apiJson, guardedRead } from "@/server/security/guard";
+import { toPublicLive } from "@/lib/live-public";
 import { getLiveService } from "@/server/live/runtime";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +9,6 @@ export async function GET(req: Request, { params }: Ctx) {
   const { id } = await params;
   return guardedRead(req, async ({ session }) => {
     if (!/^lop_\d{14}_[0-9a-f]{8}$/.test(id)) return apiError("live_not_found");
-    return apiJson(await getLiveService().getOperation(id, session.id));
+    return apiJson(toPublicLive(await getLiveService().getOperation(id, session.id)));
   });
 }

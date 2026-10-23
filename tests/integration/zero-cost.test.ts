@@ -34,28 +34,35 @@ describe("the network guard itself works (so 'no request happened' is meaningful
   });
 });
 
-describe("live AI is disabled by default and cannot be enabled", () => {
+describe("live AI is disabled by default and needs BOTH explicit opt-ins", () => {
   it("defaults: provider is the offline mock, live requests are off", () => {
     const cfg = loadConfig({});
-    expect(cfg.ai).toEqual({ provider: "mock", liveRequestsEnabled: false });
+    expect(cfg.ai).toMatchObject({ provider: "mock", liveRequestsEnabled: false, boxapi: { model: null, apiKey: null, maxOutputTokens: 600 } }); // no implicit model, no key, a small output cap
     const p = resolveProvider(cfg);
     expect(p).toMatchObject({ kind: "mock", simulated: true });
   });
 
-  it.each(["true", "1", "yes", "on", "TRUE", "enabled"])("AI_LIVE_REQUESTS_ENABLED=%s is REJECTED at startup (there is no live client to enable)", (v) => {
+  it.each(["true", "1", "yes", "on", "TRUE", "enabled"])("AI_LIVE_REQUESTS_ENABLED=%s alone (without AI_PROVIDER=boxapi) is REJECTED at startup", (v) => {
     expect(() => loadConfig({ AI_LIVE_REQUESTS_ENABLED: v })).toThrow(/AI_LIVE_REQUESTS_ENABLED/);
+    expect(() => loadConfig({ AI_LIVE_REQUESTS_ENABLED: v, AI_PROVIDER: "mock" })).toThrow(/AI_LIVE_REQUESTS_ENABLED/);
+  });
+  it("AI_PROVIDER=boxapi alone (without the explicit live opt-in) is REJECTED; with both it is accepted — and a missing key/model is NOT silently defaulted", () => {
+    expect(() => loadConfig({ AI_PROVIDER: "boxapi" })).toThrow(/AI_LIVE_REQUESTS_ENABLED/);
+    expect(() => loadConfig({ AI_PROVIDER: "boxapi", AI_LIVE_REQUESTS_ENABLED: "false" })).toThrow(/AI_LIVE_REQUESTS_ENABLED/);
+    const cfg = loadConfig({ AI_PROVIDER: "boxapi", AI_LIVE_REQUESTS_ENABLED: "true" });
+    expect(cfg.ai).toMatchObject({ provider: "boxapi", liveRequestsEnabled: true, boxapi: { model: null, apiKey: null } });
   });
 
   it.each([undefined, "", "false", "0"])("AI_LIVE_REQUESTS_ENABLED=%j is accepted and stays off", (v) => {
     expect(loadConfig({ AI_LIVE_REQUESTS_ENABLED: v }).ai.liveRequestsEnabled).toBe(false);
   });
 
-  it.each(["openai", "anthropic", "boxapi", "live", "gpt", ""])("AI_PROVIDER=%j is not a valid provider", (v) => {
+  it.each(["openai", "anthropic", "live", "gpt", ""])("AI_PROVIDER=%j is not a valid provider", (v) => {
     if (v === "") return expect(loadConfig({ AI_PROVIDER: undefined }).ai.provider).toBe("mock");
     expect(() => loadConfig({ AI_PROVIDER: v })).toThrow();
   });
 
-  it("'disabled' resolves to the fail-closed provider; even a forged 'live' flag cannot produce a live client", () => {
+  it("'disabled' resolves to the fail-closed provider; even a forged 'live' flag cannot produce a live client (only the explicit BoxAPI resolver can)", () => {
     expect(resolveProvider(loadConfig({ AI_PROVIDER: "disabled" }))).toBeInstanceOf(DisabledLiveLLMProvider);
     const forged = { ai: { provider: "mock", liveRequestsEnabled: true } } as never;
     expect(resolveProvider(forged)).toBeInstanceOf(DisabledLiveLLMProvider);
@@ -71,10 +78,25 @@ describe("live AI is disabled by default and cannot be enabled", () => {
 });
 
 describe("no AI-related network code, credentials or dependencies exist", () => {
-  it("source and scripts mention no paid-AI hosts, SDK clients or embedding endpoints", () => {
-    const banned = /(boxapi|api\.openai|openai\.com|api\.anthropic|anthropic\.com|generativelanguage|api\.cohere|api\.mistral|groq\.com|openrouter|\/v1\/(chat\/completions|embeddings|completions)|embeddings?\.create|new (OpenAI|Anthropic)\b)/i;
+  it("source and scripts mention no OTHER paid-AI hosts, SDK clients or embedding endpoints", () => {
+    const banned = /(api\.openai|openai\.com|api\.anthropic|anthropic\.com|generativelanguage|api\.cohere|api\.mistral|groq\.com|openrouter|\/v1\/(embeddings|completions)|embeddings?\.create|new (OpenAI|Anthropic)\b)/i;
     const offenders = sourceFiles.filter((f) => banned.test(readFileSync(f, "utf8"))).map((f) => path.relative(ROOT, f));
     expect(offenders).toEqual([]);
+  });
+
+  it("the BoxAPI host and chat endpoint appear in exactly two source files: the provider (egress) and the config (trusted-host allowlist)", () => {
+    const hits = sourceFiles.filter((f) => /ai\.boxapi\.ir|\/chat\/completions/i.test(readFileSync(f, "utf8"))).map((f) => path.relative(ROOT, f).split(path.sep).join("/")).sort();
+    expect(hits).toEqual(["src/server/ai/boxapi.ts", "src/server/config/env.ts"]);
+  });
+
+  it("only src/server/ai/boxapi.ts can send a model request: no other file outside the Liara/own-origin layers calls fetch with a model payload, and the AI layer never touches Liara", () => {
+    const aiFiles = walk(path.join(ROOT, "src/server/ai")).filter((f) => f.endsWith(".ts"));
+    for (const f of aiFiles) {
+      const code = readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      expect(code, f).not.toMatch(/from ["'](\.\.\/)+(live|liara)\//);
+      expect(code, f).not.toMatch(/liara\.ir|api\.liara|LIARA_/);
+      if (!f.endsWith("boxapi.ts")) expect(code, f).not.toMatch(/\bfetch\s*\(|node:(https?|net|tls|dns)/);
+    }
   });
 
   it("no AI SDK or LLM client library is a dependency", () => {
@@ -83,12 +105,13 @@ describe("no AI-related network code, credentials or dependencies exist", () => 
     expect(all.filter((d) => /^(openai|@anthropic-ai\/.*|@ai-sdk\/.*|ai|langchain.*|@langchain\/.*|cohere.*|@google\/generative-ai|groq-sdk|ollama|boxapi.*|llamaindex|@mistralai\/.*)$/i.test(d))).toEqual([]);
   });
 
-  it(".env.example needs no AI key and pins live requests off", () => {
+  it(".env.example holds no AI key, pins live requests off and keeps every BoxAPI variable commented out", () => {
     const env = readFileSync(path.join(ROOT, ".env.example"), "utf8");
     expect(env).toMatch(/^AI_LIVE_REQUESTS_ENABLED=false$/m);
     expect(env).toMatch(/^AI_PROVIDER=mock$/m);
-    expect(env).not.toMatch(/^(BOX|OPENAI|ANTHROPIC|LLM|AI)_?[A-Z_]*(API_?KEY|TOKEN|SECRET)\s*=/im);
-    expect(env).not.toMatch(/boxapi/i);
+    expect(env).not.toMatch(/^(BOX|OPENAI|ANTHROPIC|LLM|AI)_?[A-Z_]*(API_?KEY|TOKEN|SECRET)\s*=/im); // no active (uncommented) key assignment
+    expect(env).not.toMatch(/^BOXAPI_[A-Z_]+\s*=/m); // every BoxAPI line is a comment
+    expect(env).not.toMatch(/box-ai-[0-9a-f]{8,}/i); // and no key-shaped value anywhere
   });
 
   it("the diagnostics layer cannot perform I/O: no fetch, http(s), net, tls, dns, undici, child_process or process.env", () => {

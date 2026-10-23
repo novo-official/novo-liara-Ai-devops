@@ -44,6 +44,8 @@ export interface ToolContext {
   budget: ToolBudget;
   evidence: Map<SourceKey, AnyEvidence>;
   provider: DiagnosticLLMProvider;
+  /** the operator's own words for this run (≤ 500 chars, untrusted): lets the narrative answer the actual question */
+  userRequest?: string;
   semantics: Semantics;
   report: { current: DiagnosticReport | null };
   audit: (event: string, data: Record<string, unknown>) => Promise<void>;
@@ -78,6 +80,9 @@ async function collect(ctx: ToolContext, source: SourceKey): Promise<AnyEvidence
 const avail = (e: AnyEvidence) => ({ availability: e.availability, evidenceId: e.id });
 const win = (ctx: ToolContext, w: number) => (ctx.windowMinutes = w as WindowMinutes);
 const bound = <T,>(xs: T[], n: number) => xs.slice(0, n);
+
+/** budget for the real model's narrative inside `diagnose_application` (the run itself is bounded by DIAGNOSTICS_RUN_TIMEOUT_SECONDS) */
+const LIVE_NARRATIVE_TIMEOUT_MS = 20_000;
 
 export const TOOLS = {
   list_apps: def({
@@ -227,7 +232,7 @@ export const TOOLS = {
     capability: null,
     risk: "R0",
     authz: { session: true, appScoped: true },
-    timeoutMs: 10_000,
+    timeoutMs: 25_000, // covers the optional real-model narrative (LIVE_NARRATIVE_TIMEOUT_MS); the offline providers answer in milliseconds
     budgetCost: 0,
     audit: { category: "analysis", sensitive: false },
     async run(ctx, args) {
@@ -236,7 +241,10 @@ export const TOOLS = {
       const items = order.map((s) => ctx.evidence.get(s)).filter((x): x is AnyEvidence => !!x);
       const evidence = new EvidenceSet(items);
       const analysis = analyze({ runId: ctx.runId, intent, evidence, semantics: ctx.semantics, now: ctx.now() });
-      const narrative = await buildNarrative(ctx.provider, llmContext({ app: ctx.app, intent, analysis, simulated: ctx.svc.mode === "mock" }), evidence.ids(), { timeoutMs: 3000, signal: ctx.signal });
+      // A real model is only asked to analyse evidence that exists: with nothing usable collected there is nothing to analyse (and nothing to pay for).
+      const usable = items.some((e) => e.availability === "available" || e.availability === "stale");
+      const skipModel = ctx.provider.kind === "live" && !usable;
+      const narrative = skipModel ? { status: "no_evidence" as const, source: "none" as const, citedEvidenceIds: [], providerId: ctx.provider.id } : await buildNarrative(ctx.provider, llmContext({ app: ctx.app, intent, analysis, simulated: ctx.svc.mode === "mock", evidence, userRequest: ctx.userRequest }), evidence.ids(), { timeoutMs: ctx.provider.kind === "live" ? LIVE_NARRATIVE_TIMEOUT_MS : 3000, signal: ctx.signal });
       ctx.report.current = buildReport({ runId: ctx.runId, app: ctx.app, intent, evidence, analysis, narrative, now: ctx.now() });
       return { output: { status: analysis.diagnosis.status, hypotheses: analysis.diagnosis.hypotheses.map((h) => ({ key: h.key, confidence: h.confidence })), recommendationCount: analysis.recommendations.length, evidenceCount: items.length, narrativeStatus: narrative.status } };
     },

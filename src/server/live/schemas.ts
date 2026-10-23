@@ -62,6 +62,11 @@ export const LiveProposalSchema = z
 
 const Step = z.object({ name: z.enum(["create_application", "upload_source", "create_release", "verify_deployment"]), status: z.enum(["pending", "started", "done", "failed", "unknown"]), startedAt: ISO.nullable(), endedAt: ISO.nullable(), outcome: z.string().max(60).nullable() }).strict();
 const Level = z.enum(["unknown", "ok", "failed"]);
+const PROBE_OUTCOME = z.enum(["ok", "http_error", "blocked_address", "invalid_target", "timeout", "network", "redirect", "too_large", "disabled", "cancelled"]);
+const PROBE_FAILURE = z.enum(["dns", "tls", "connection", "timeout", "cancelled", "blocked_address", "redirect", "http_status", "too_large", "marker_mismatch", "invalid_target", "disabled"]);
+export const HealthObservationSchema = z.object({ source: z.literal("http_probe"), observedAt: ISO, outcome: PROBE_OUTCOME, status: z.number().int().min(0).max(999).nullable(), markerRequired: z.boolean(), markerMatched: z.boolean().nullable(), failure: PROBE_FAILURE.nullable(), durationMs: z.number().int().min(0).max(3_600_000).nullable() }).strict();
+export const AppletsObservationSchema = z.object({ observedAt: ISO, readable: z.boolean(), runtimeClass: z.string().max(30).nullable(), appletCount: z.number().int().min(0).max(1000).nullable(), failure: z.string().max(40).nullable() }).strict();
+const RUNTIME = z.enum(["observed", "inferred", "unknown"]);
 
 export const LiveOperationSchema = z
   .object({
@@ -81,6 +86,9 @@ export const LiveOperationSchema = z
     // ids RETURNED by Liara are opaque strings (see VENDOR_ID): the strict project-id pattern here would make persisting a SUCCESSFUL upload throw
     remote: z.object({ appConfirmed: z.boolean().nullable(), sourceId: z.string().regex(VENDOR_ID).nullable(), releaseId: z.string().regex(VENDOR_ID).nullable() }).strict(),
     ladder: z.object({ apiAcceptedRequest: Level, sourceUploaded: Level, releaseCreated: Level, buildCompleted: Level, runtimeStarted: Level, httpHealthVerified: Level }).strict(),
+    evidence: z.object({ runtime: RUNTIME, appletsReadable: z.boolean().nullable(), observedAt: ISO.optional(), health: HealthObservationSchema.nullable().optional(), applets: AppletsObservationSchema.nullable().optional() }).strict().optional(),
+    runner: z.object({ instance: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/), pid: z.number().int().min(1).max(4_294_967_295) }).strict().optional(),
+    latestCheck: z.object({ observedAt: ISO, verdict: z.enum(["http_ok", "http_failed", "unknown"]), runtime: RUNTIME, currentReleaseMatches: z.boolean().nullable(), health: HealthObservationSchema.nullable(), applets: AppletsObservationSchema.nullable() }).strict().optional(),
     failure: z.object({ code: z.string().max(60), step: z.enum(["create_application", "upload_source", "create_release", "verify_deployment", "preflight", "approval"]), messageFa: z.string().max(400) }).strict().nullable(),
     recoveryFa: z.array(z.string().max(400)).max(12),
     transitions: z.array(z.object({ at: ISO, from: z.enum(LIVE_STATES).nullable(), to: z.enum(LIVE_STATES), note: z.string().max(80).nullable() }).strict()).max(60),

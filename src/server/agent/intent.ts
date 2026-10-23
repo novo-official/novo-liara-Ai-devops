@@ -32,7 +32,9 @@ export interface Option {
 
 export type ParseResult =
   | { kind: "resolved"; intent: AgentIntent; app: string | null; windowMinutes: number | null; windowNoteFa?: string; ref: { index: number } | null; rules: string[] }
-  | { kind: "clarify"; reason: "ambiguous_intent" | "missing_app" | "multiple_apps" | "no_context"; questionFa: string; options: Option[] }
+  | { kind: "clarify"; reason: "ambiguous_intent" | "missing_app" | "multiple_apps" | "no_context"; questionFa: string; options: Option[];
+      /** ambiguous_intent only: the symptom families found in the message, the authorised app it resolved to (or null) and the window — lets the caller run ONE read-only investigation instead of asking which symptom comes first */
+      candidates?: AgentIntent[]; app?: string | null; windowMinutes?: number | null }
   | { kind: "unsupported"; reason: "empty" | "too_long" | "unsupported_request" | "blocked_action" | "policy_override" | "unknown_app"; messageFa: string; suggestions: string[] };
 
 export const SUGGESTED_PROMPTS: Option[] = [
@@ -140,7 +142,7 @@ function windowOf(spaced: string): { minutes: number | null; noteFa?: string } {
 const APP_KEYWORD = /(?:^|\s)(?:برنامه|اپ|اپلیکیشن|سرویس|app|application)\s+([a-z0-9][a-z0-9-]{1,61}[a-z0-9])(?=\s|$)/g;
 const HYPHEN_NAME = /(?:^|\s)([a-z0-9]+(?:-[a-z0-9]+)+)(?=\s|$)/g;
 
-function extractApps(spaced: string, apps: string[]): { found: string[]; unknown: string[] } {
+export function extractApps(spaced: string, apps: string[]): { found: string[]; unknown: string[] } {
   const allowed = new Set(apps);
   const found = new Set<string>();
   const unknown = new Set<string>();
@@ -222,7 +224,7 @@ export function parseIntent(text: string, ctx: ParseContext): ParseResult {
   if (strong.length >= 2) {
     const labels: Record<string, string> = { investigate_http500: "خطای HTTP 500", investigate_restarts: "ری‌استارت‌های مکرر", investigate_slow: "کندی", investigate_deployments: "شکست استقرار" };
     const texts: Record<string, string> = { investigate_http500: SUGGESTED_PROMPTS[1]!.text, investigate_restarts: SUGGESTED_PROMPTS[0]!.text, investigate_slow: SUGGESTED_PROMPTS[2]!.text, investigate_deployments: SUGGESTED_PROMPTS[3]!.text };
-    return { kind: "clarify", reason: "ambiguous_intent", questionFa: "چند موضوع متفاوت در پیام شما هست. کدام را اول بررسی کنم؟ (من هیچ اقدامی را خودکار انتخاب نمی‌کنم.)", options: strong.map((s) => ({ labelFa: labels[s]!, text: texts[s]! })) };
+    return { kind: "clarify", reason: "ambiguous_intent", candidates: strong, app, windowMinutes: win.minutes, questionFa: "چند موضوع متفاوت در پیام شما هست. کدام را اول بررسی کنم؟ (من هیچ اقدامی را خودکار انتخاب نمی‌کنم.)", options: strong.map((s) => ({ labelFa: labels[s]!, text: texts[s]! })) };
   }
 
   const explain = F.explain.test(compact);

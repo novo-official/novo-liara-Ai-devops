@@ -10,6 +10,9 @@ import { parsePlanUnits, type PlanUnits } from "../live/units";
 
 /** Hosts the adapter may ever talk to. api.iran.liara.ir appears only in the CLI source (unverified) so it is NOT trusted. */
 export const TRUSTED_LIARA_HOSTS: readonly string[] = ["api.liara.ir"];
+/** BoxAPI (official docs: https://boxapi.ir/docs/ai/): the OpenAI-style AI gateway. Only this host is ever accepted for model requests. */
+export const BOXAPI_DEFAULT_BASE_URL = "https://ai.boxapi.ir/ai/v1";
+export const TRUSTED_BOXAPI_HOSTS: readonly string[] = ["ai.boxapi.ir"];
 
 /** Liara app names (matches the official CLI rule, plus a length cap). */
 export const APP_NAME_REGEX = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
@@ -51,9 +54,17 @@ const RawEnv = z.object({
   SESSION_ABSOLUTE_TIMEOUT_HOURS: intRange(1, 72, 8),
   TRUST_PROXY_HEADERS: bool,
   ENABLE_MUTATIONS: z.string().optional(),
-  // Phase 1C: AI is strictly offline. The only providers that exist are "mock" (simulated) and "disabled".
-  AI_PROVIDER: z.enum(["mock", "disabled"]).optional().default("mock"),
+  // AI text generation. "mock" (simulated, offline) and "disabled" never touch the network. "boxapi" is the ONLY real provider and needs an explicit opt-in:
+  // AI_PROVIDER=boxapi AND AI_LIVE_REQUESTS_ENABLED=true (neither alone does anything). This is independent of Liara live execution (LIARA_LIVE_DEPLOY_ENABLED).
+  AI_PROVIDER: z.enum(["mock", "disabled", "boxapi"]).optional().default("mock"),
   AI_LIVE_REQUESTS_ENABLED: z.string().optional(),
+  BOXAPI_API_KEY: z.string().optional(),
+  BOXAPI_BASE_URL: z.string().optional(),
+  BOXAPI_MODEL: z.string().optional(),
+  BOXAPI_MAX_OUTPUT_TOKENS: intRange(64, 4000, 600), // includes any hidden reasoning tokens of the model; deliberately small to protect a limited credit
+  BOXAPI_TIMEOUT_MS: intRange(2000, 60000, 25000),
+  /** optional lifetime cap on real requests per server process (e.g. 1 for a one-shot demo); unset = only the hourly guards apply */
+  BOXAPI_MAX_REQUESTS_TOTAL: z.string().optional(),
   // Phase 2A: live deployment execution. OFF by default; a flag alone never authorises anything (see live/service.ts).
   LIARA_LIVE_DEPLOY_ENABLED: bool,
   LIARA_PLAN_UNITS_JSON: z.string().optional(),
@@ -89,7 +100,13 @@ export interface AppConfig {
     logsApi: "v1" | "v2" | "auto";
     allowUndocumented: boolean;
   };
-  ai: { provider: "mock" | "disabled"; liveRequestsEnabled: false };
+  ai: {
+    provider: "mock" | "disabled" | "boxapi";
+    /** true ONLY when the operator explicitly opted in to real model requests (AI_PROVIDER=boxapi + AI_LIVE_REQUESTS_ENABLED=true) */
+    liveRequestsEnabled: boolean;
+    /** BoxAPI connection. `model` has NO default (a paid model is never chosen implicitly); `apiKey` is server-side only. */
+    boxapi: { baseUrl: string; model: string | null; apiKey: Secret | null; maxOutputTokens: number; timeoutMs: number; maxTotalRequests: number | null };
+  };
   /** Phase 2A. `enabled` is only ONE of many independent conditions for any live write; default false. */
   live: { enabled: boolean; planUnits: PlanUnits | null; appDomainSuffixes: readonly string[]; /** operator attests the CLI-observed write fields were verified (Phase 2B) */ contractAttested: boolean; networkId: string | null; healthPath: string; healthMarker: string | null; /** Phase 2B: empty allowlist permitted (zero-app account); scope = verified created apps only */ firstAppBootstrap: boolean };
   /** Phase 2D. The CLI backend exists only when `enabled` AND the tool is pinned (absolute entry path, SHA-256, exact version). */
@@ -153,10 +170,26 @@ export function loadConfig(env: Record<string, string | undefined>, opts: { veri
   const problems: string[] = [];
 
   // Phase 1A is read-only by construction: refuse any attempt to enable writes.
-  // Phase 1C has no live AI client at all. Enabling it is rejected rather than silently ignored.
-  if (e.AI_LIVE_REQUESTS_ENABLED !== undefined && !["", "false", "0"].includes(e.AI_LIVE_REQUESTS_ENABLED)) {
-    problems.push("AI_LIVE_REQUESTS_ENABLED is not supported in Phase 1C (no live AI client exists; AI is offline/mock only)");
+  // Real model requests need BOTH switches. Either one alone is rejected rather than silently ignored.
+  const aiLiveRequested = e.AI_LIVE_REQUESTS_ENABLED !== undefined && !["", "false", "0"].includes(e.AI_LIVE_REQUESTS_ENABLED);
+  if (aiLiveRequested && e.AI_LIVE_REQUESTS_ENABLED !== "true" && e.AI_LIVE_REQUESTS_ENABLED !== "1") problems.push("AI_LIVE_REQUESTS_ENABLED must be true or false");
+  else if (aiLiveRequested && e.AI_PROVIDER !== "boxapi") problems.push("AI_LIVE_REQUESTS_ENABLED requires AI_PROVIDER=boxapi (otherwise AI is offline/mock only)");
+  if (e.AI_PROVIDER === "boxapi" && !aiLiveRequested) problems.push("AI_PROVIDER=boxapi requires AI_LIVE_REQUESTS_ENABLED=true (an explicit opt-in to paid model requests)");
+  const boxBase = e.BOXAPI_BASE_URL?.trim() || BOXAPI_DEFAULT_BASE_URL;
+  let boxBaseOk = false;
+  try {
+    const u = new URL(boxBase);
+    boxBaseOk = u.protocol === "https:" && TRUSTED_BOXAPI_HOSTS.includes(u.hostname) && !u.username && !u.password && !u.search && !u.hash;
+  } catch {
+    boxBaseOk = false;
   }
+  if (!boxBaseOk) problems.push("BOXAPI_BASE_URL must be an https URL on a trusted BoxAPI host");
+  const boxModel = e.BOXAPI_MODEL?.trim() || null;
+  if (boxModel && !/^[A-Za-z0-9~][A-Za-z0-9._:/-]{0,99}$/.test(boxModel)) problems.push("BOXAPI_MODEL has an invalid format");
+  const totalRaw = e.BOXAPI_MAX_REQUESTS_TOTAL?.trim();
+  if (totalRaw && !/^[1-9][0-9]{0,3}$/.test(totalRaw)) problems.push("BOXAPI_MAX_REQUESTS_TOTAL must be a positive integer");
+  const boxKey = e.BOXAPI_API_KEY?.trim() ? new Secret(e.BOXAPI_API_KEY.trim()) : null;
+  if (boxKey) registerSecret(boxKey.reveal());
   if (e.ENABLE_MUTATIONS !== undefined && !["", "false", "0"].includes(e.ENABLE_MUTATIONS)) {
     problems.push("ENABLE_MUTATIONS is not supported in Phase 1A (this build has no write capability)");
   }
@@ -231,7 +264,7 @@ export function loadConfig(env: Record<string, string | undefined>, opts: { veri
       logsApi: e.LIARA_LOGS_API,
       allowUndocumented,
     },
-    ai: { provider: e.AI_PROVIDER, liveRequestsEnabled: false },
+    ai: { provider: e.AI_PROVIDER, liveRequestsEnabled: aiLiveRequested && e.AI_PROVIDER === "boxapi", boxapi: { baseUrl: boxBase.replace(/\/+$/, ""), model: boxModel, apiKey: boxKey, maxOutputTokens: e.BOXAPI_MAX_OUTPUT_TOKENS, timeoutMs: e.BOXAPI_TIMEOUT_MS, maxTotalRequests: totalRaw && /^[1-9][0-9]{0,3}$/.test(totalRaw) ? Number(totalRaw) : null } },
     live: { enabled: e.LIARA_LIVE_DEPLOY_ENABLED, planUnits: units.units, appDomainSuffixes: suffixes, contractAttested: e.LIARA_LIVE_CONTRACT_ATTESTED, networkId, healthPath, healthMarker, firstAppBootstrap: e.LIARA_FIRST_APP_BOOTSTRAP },
     cli: { enabled: e.LIARA_CLI_ENABLED, entry: cliEntry, entrySha256: cliSha, version: cliVersion, timeoutMs: e.LIARA_CLI_TIMEOUT_SECONDS * 1000 },
     diagnostics: {
@@ -252,12 +285,24 @@ export function loadConfig(env: Record<string, string | undefined>, opts: { veri
 }
 
 let cached: AppConfig | undefined;
+let cachedSig = "";
 let override: AppConfig | undefined;
 
-/** Lazily loads and caches the config for the running server. */
+/** The values of every variable this module understands, as one string (never logged). Used only in development to notice an edited .env.local. */
+const envSignature = (): string => Object.keys(RawEnv.shape).map((k) => process.env[k] ?? "").join("\u0001");
+
+/**
+ * Lazily loads and caches the config for the running server. In production it is read once. In development Next reloads .env.local when it changes, so the cache is
+ * dropped when any known variable's value changed — otherwise a long-running dev server keeps answering with the configuration it started with.
+ */
 export function getConfig(): AppConfig {
   if (override) return override;
-  cached ??= loadConfig(process.env);
+  if (process.env.NODE_ENV === "production") return (cached ??= loadConfig(process.env));
+  const sig = envSignature();
+  if (!cached || sig !== cachedSig) {
+    cached = loadConfig(process.env);
+    cachedSig = sig;
+  }
   return cached;
 }
 

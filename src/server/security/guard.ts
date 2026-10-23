@@ -100,8 +100,19 @@ const g = globalThis as unknown as { __apiLimiter?: SlidingWindowLimiter };
 function apiLimiter(): SlidingWindowLimiter {
   return (g.__apiLimiter ??= new SlidingWindowLimiter({ windowMs: 60_000, max: 120 }));
 }
+/** The offline preview parses and analyses a whole ZIP, so it gets its own, tighter per-session budget (on top of the general one) that is charged BEFORE the body is read. */
+const PREVIEW_LIMIT = { windowMs: 60_000, max: 12 };
+const gp = globalThis as unknown as { __previewLimiter?: SlidingWindowLimiter };
+function previewLimiter(): SlidingWindowLimiter {
+  return (gp.__previewLimiter ??= new SlidingWindowLimiter(PREVIEW_LIMIT));
+}
+export function takePreviewSlot(sessionId: string): NextResponse | null {
+  const rl = previewLimiter().take(sessionId);
+  return rl.allowed ? null : apiError("rate_limited", { retryAfterSec: rl.retryAfterSec });
+}
 export function __resetApiLimiterForTests(): void {
   g.__apiLimiter = undefined;
+  gp.__previewLimiter = undefined;
 }
 
 export function sessionFromRequest(req: Request): Session | null {
@@ -201,7 +212,7 @@ const ZIP_TYPES = /^application\/(zip|x-zip-compressed|octet-stream)\b/i;
  */
 export async function guardedUpload(
   req: Request,
-  limits: { maxBytes: number; timeoutMs: number },
+  limits: { maxBytes: number; timeoutMs: number; /** an extra, route-specific gate that runs after the general rate limit and BEFORE any of the body is read */ beforeBody?: (ctx: { session: Session; headers: Headers }) => NextResponse | null },
   handler: (ctx: { session: Session; bytes: Buffer; filename: string | null; conversationId: string | null; headers: Headers }) => Promise<unknown>,
 ): Promise<NextResponse> {
   try {
@@ -212,6 +223,8 @@ export async function guardedUpload(
     if (!ZIP_TYPES.test(req.headers.get("content-type") ?? "")) return apiError("upload_rejected", { reason: "bad_content_type" });
     const rl = apiLimiter().take(session.id);
     if (!rl.allowed) return apiError("rate_limited", { retryAfterSec: rl.retryAfterSec });
+    const gated = limits.beforeBody?.({ session, headers: req.headers });
+    if (gated) return gated;
     const declared = Number(req.headers.get("content-length") ?? "");
     if (Number.isFinite(declared) && declared > limits.maxBytes) return apiError("upload_rejected", { reason: "too_large" });
     if (!req.body) return apiError("upload_rejected", { reason: "empty" });

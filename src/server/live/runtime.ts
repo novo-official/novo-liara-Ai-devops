@@ -1,5 +1,6 @@
 import "server-only";
 import { getConfig } from "../config/env";
+import { configFingerprint } from "../config/fingerprint";
 import { getSharedStore } from "../diagnostics/runtime";
 import { ownerHashOf } from "../diagnostics/store";
 import { hasActiveSession } from "../security/session";
@@ -10,7 +11,7 @@ import { LiaraCliBackend } from "./cli/backend";
 import { NodeProcessRunner } from "./cli/process-runner";
 import { createLiveWriteClient } from "./write-client";
 
-const g = globalThis as unknown as { __liveService?: LiveDeploymentService };
+const g = globalThis as unknown as { __liveService?: { s: LiveDeploymentService; fp: string; cls: typeof LiveDeploymentService } };
 let testService: LiveDeploymentService | undefined;
 
 /**
@@ -19,10 +20,13 @@ let testService: LiveDeploymentService | undefined;
  */
 export function getLiveService(): LiveDeploymentService {
   if (testService) return testService;
-  if (g.__liveService) return g.__liveService;
   const cfg = getConfig();
-  g.__liveService = new LiveDeploymentService({ cfg, store: getSharedStore(), reader: liveReaderFrom(getService()), transport: createLiveWriteClient(cfg), cliBackend: createCliBackend(cfg), isOwnerActive: (ownerHash) => hasActiveSession((id) => ownerHashOf(id) === ownerHash) });
-  return g.__liveService;
+  const fp = configFingerprint(cfg);
+  const cur = g.__liveService;
+  if (cur && cur.fp === fp && cur.cls === LiveDeploymentService) return cur.s; // rebuilt after a config or code change (see agent/runtime.ts)
+  const s = new LiveDeploymentService({ cfg, store: getSharedStore(), reader: liveReaderFrom(getService()), transport: createLiveWriteClient(cfg), cliBackend: createCliBackend(cfg), isOwnerActive: (ownerHash) => hasActiveSession((id) => ownerHashOf(id) === ownerHash) });
+  g.__liveService = { s, fp, cls: LiveDeploymentService };
+  return s;
 }
 
 /**

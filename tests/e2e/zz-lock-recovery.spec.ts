@@ -45,7 +45,7 @@ test.describe("old locked operation + newer run + new login", () => {
     await expect(page.getByTestId("live-locks")).toBeVisible();
     await expect(lock).toHaveAttribute("data-access", "orphan");
     await expect(lock).toHaveAttribute("data-state", "NEEDS_OPERATOR_REVIEW");
-    await expect(page.getByTestId("live-lock-orphan-note")).toContainText("دیگر وجود ندارد");
+    await expect(lock.getByTestId("live-lock-orphan-note")).toContainText("دیگر وجود ندارد");
     const opId = (await lock.getAttribute("data-op-id"))!;
     expect(opId).toMatch(/^lop_\d{14}_[0-9a-f]{8}$/);
     await expect(lock.getByTestId("live-reverify")).toBeVisible();
@@ -90,7 +90,7 @@ test.describe("old locked operation + newer run + new login", () => {
     const [resp] = await Promise.all([page.waitForResponse((x) => x.url().endsWith(`/api/agent/live/operations/${opId}/resolve`)), lock.getByTestId("live-abandon-confirm").click()]);
     expect(resp.status()).toBe(200);
     expect((await resp.json()).state).toBe("FAILED");
-    await expect(page.getByTestId("live-locks")).toHaveCount(0);
+    await expect(lock).toHaveCount(0); // (the seed's other application keeps its own lock card)
     expect(writes).toHaveLength(1);
     expect(writes[0]).toMatchObject({ method: "POST", path: `/api/agent/live/operations/${opId}/resolve` });
     expect(JSON.parse(writes[0]!.body!)).toEqual({ action: "abandon", adoptOrphan: true });
@@ -102,7 +102,7 @@ test.describe("old locked operation + newer run + new login", () => {
       const run = performance.getEntriesByType("resource").map((e) => e.name).filter((n) => n.includes("/api/agent/live/status?runId=")).at(-1)!.split("runId=")[1]!;
       return (await fetch("/api/agent/live/status?runId=" + run)).json();
     });
-    expect(status.locks).toEqual([]);
+    expect(status.locks.filter((l: { appName: string }) => l.appName === "demo-worker")).toEqual([]);
 
     // 7. no replay: the same operation cannot be closed (or cancelled) again, and a hand-made execute of its consumed proposal is refused
     const again = await page.evaluate(async (id) => {

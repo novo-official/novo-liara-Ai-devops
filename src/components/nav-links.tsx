@@ -16,7 +16,7 @@ const items = [
 export function NavLinks() {
   const path = usePathname();
   return (
-    <nav aria-label="ناوبری اصلی" className="flex items-center gap-1">
+    <nav aria-label="ناوبری اصلی" className="flex items-center gap-1 rounded-xl bg-card/60 p-1 border border-border/60 shadow-inner backdrop-blur-md">
       {items.map(({ href, label, icon: Icon }) => {
         const active = path === href || path.startsWith(href + "/");
         return (
@@ -25,15 +25,21 @@ export function NavLinks() {
             href={href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-sm transition-colors hover:bg-muted",
-              active ? "bg-accent text-accent-foreground" : "text-muted-foreground",
+              "relative inline-flex min-h-9 items-center gap-2 rounded-lg px-3 py-1.5 text-xs sm:text-sm font-medium transition-all duration-200 select-none",
+              active
+                ? "bg-primary/15 text-primary border border-primary/25 shadow-sm"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/40",
             )}
           >
-            <Icon className="size-4" aria-hidden />
+            <Icon className={cn("size-4 transition-transform duration-200", active && "scale-110 text-primary")} aria-hidden />
             <span>{label}</span>
+            {active && (
+              <span className="absolute -bottom-1 start-1/2 -translate-x-1/2 w-4 h-[2px] rounded-full bg-primary" />
+            )}
           </Link>
         );
       })}
     </nav>
   );
 }
+

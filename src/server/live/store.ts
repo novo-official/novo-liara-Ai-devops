@@ -84,7 +84,10 @@ export class MemoryLiveStore extends MemoryAgentStore implements LiveStore {
     if (!raw) return { changed: false, status: "BLOCKED" as LiveProposalStatus };
     const p = parseP(JSON.parse(raw));
     const n = needs(to);
-    const ok = p.status === "PENDING" && (n === "none" || (n === "expiry_ok" && p.expiresAt > nowIso) || (n === "expired_only" && p.expiresAt <= nowIso));
+    // EXPIRED is also legal from APPROVED (approved but never executed, deadline passed): the compare-and-set below is the same atomic step `beginExecution` uses,
+    // so an execution that already started (CONSUMED) can never be expired, and an expired one can never start.
+    const fromOk = p.status === "PENDING" || (to === "EXPIRED" && p.status === "APPROVED");
+    const ok = fromOk && (n === "none" || (n === "expiry_ok" && p.expiresAt > nowIso) || (n === "expired_only" && p.expiresAt <= nowIso));
     if (!ok) return { changed: false, status: p.status };
     this.lp.set(id, JSON.stringify({ ...p, status: to }));
     if (approval) this.la.push(approval);
@@ -205,7 +208,8 @@ export class SqliteLiveStore extends SqliteAgentStore implements LiveStore {
       const cond = n === "expiry_ok" ? "AND expires_at > ?" : n === "expired_only" ? "AND expires_at <= ?" : "";
       const args: unknown[] = [to, id];
       if (n !== "none") args.push(nowIso);
-      const res = this.db.prepare(`UPDATE live_proposals SET status=? WHERE id=? AND status='PENDING' ${cond}`).run(...args) as { changes: number | bigint };
+      const from = to === "EXPIRED" ? "('PENDING','APPROVED')" : "('PENDING')"; // see the in-memory store: APPROVED→EXPIRED only, and only once the deadline has passed
+      const res = this.db.prepare(`UPDATE live_proposals SET status=? WHERE id=? AND status IN ${from} ${cond}`).run(...args) as { changes: number | bigint };
       if (Number(res.changes) !== 1) {
         const cur = this.db.prepare("SELECT status FROM live_proposals WHERE id=?").get(id);
         return { changed: false, status: (cur ? String(cur.status) : "BLOCKED") as LiveProposalStatus };

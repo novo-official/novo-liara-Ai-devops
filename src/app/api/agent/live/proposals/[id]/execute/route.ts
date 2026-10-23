@@ -1,5 +1,6 @@
 import { UPLOAD_LIMITS } from "@/server/deploy/limits";
-import { apiError, guardedUpload } from "@/server/security/guard";
+import { apiError, apiJson, guardedUpload } from "@/server/security/guard";
+import { toPublicLive } from "@/lib/live-public";
 import { getLiveService } from "@/server/live/runtime";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,6 @@ export async function POST(req: Request, { params }: Ctx) {
   return guardedUpload(req, { maxBytes: UPLOAD_LIMITS.maxArchiveBytes, timeoutMs: UPLOAD_LIMITS.readTimeoutMs }, async ({ session, bytes }) => {
     if (id.startsWith("prop_")) return apiError("live_simulation_approval_rejected");
     if (!/^lprop_\d{14}_[0-9a-f]{8}$/.test(id)) return apiError("live_not_found");
-    return getLiveService().execute(id, session.id, bytes);
+    return apiJson(toPublicLive(await getLiveService().execute(id, session.id, bytes)));
   });
 }

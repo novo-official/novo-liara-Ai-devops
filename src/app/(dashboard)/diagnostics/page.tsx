@@ -197,9 +197,9 @@ export default async function DiagnosticsPage() {
 
 function Item({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1">{children}</dd>
+    <div className="flex flex-col gap-1 rounded-xl bg-card/60 border border-border/60 p-3.5 backdrop-blur-xs shadow-2xs">
+      <dt className="text-xs font-semibold text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-sm font-medium text-foreground">{children}</dd>
     </div>
   );
 }

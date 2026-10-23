@@ -38,7 +38,7 @@ describe("static guarantees (source scan)", () => {
 
   it("the only fetch() call sites are own-origin UI components (auth + diagnostic runs); Liara egress goes through http.ts only", () => {
     const callers = files.filter((f) => /\bfetch\s*\(/.test(stripComments(readFileSync(f, "utf8")))).map(rel).sort();
-    expect(callers).toEqual(["src/components/agent-workspace.tsx", "src/components/approval-card.tsx", "src/components/deploy-journey.tsx", "src/components/diagnostic-form.tsx", "src/components/live-deployment.tsx", "src/components/login-form.tsx", "src/components/logout-button.tsx", "src/components/run-view.tsx"]);
+    expect(callers).toEqual(["src/components/agent-workspace.tsx", "src/components/approval-card.tsx", "src/components/deploy-journey.tsx", "src/components/diagnostic-form.tsx", "src/components/live-deployment.tsx", "src/components/login-form.tsx", "src/components/logout-button.tsx", "src/components/run-view.tsx", "src/components/server-runtime-panel.tsx"]);
     for (const f of callers) {
       const code = stripComments(readFileSync(path.join(ROOT, f), "utf8"));
       // live-deployment.tsx funnels every request through one `api(url)` helper: its literal URLs are the call sites

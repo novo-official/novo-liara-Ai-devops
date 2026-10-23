@@ -20,7 +20,11 @@ import { isLiaraError } from "../liara/errors";
 import type { LiaraService } from "../liara/service";
 import type { WindowMinutes } from "../liara/read-client";
 import { log } from "../security/logger";
-import { parseIntent, FOLLOW_UP_PROMPTS, MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS, type ParseContext } from "./intent";
+import { redactText } from "../security/redact";
+import { SlidingWindowLimiter } from "../security/rate-limit";
+import { actionClaimSuspect, injectionSuspect } from "../diagnostics/signals";
+import { broadIntent, isOperational, mentionsOwnServiceProblem } from "./operational";
+import { extractApps, normalize, parseIntent, FOLLOW_UP_PROMPTS, MAX_MESSAGE_CHARS, SUGGESTED_PROMPTS, type ParseContext, type ParseResult } from "./intent";
 import { canonicalJson, contentOf, digestsEqual, evaluateProposal, OPERATION_POLICY, proposalDigest, type ProposalContent } from "./policy";
 import { createPlan, MAX_TOOL_CALLS } from "./planner";
 import { SimulatedExecutionBackend, type ExecutionBackend } from "./simulation/backend";
@@ -108,6 +112,11 @@ interface Active {
   done: Promise<void>;
 }
 
+/** bumped when the message routing changes; the runtime check shows it so a server still running older code is recognisable */
+export const AGENT_ROUTING_VERSION = "evidence-first/2";
+
+/** read-only investigation intents */
+const INVESTIGATIVE = ["investigate_restarts", "investigate_http500", "investigate_slow", "investigate_deployments", "inspect_health"] as const;
 const rid = (prefix: string, nowMs: number) => `${prefix}_${new Date(nowMs).toISOString().replace(/[-:T.Z]/g, "").slice(0, 14)}_${randomBytes(4).toString("hex")}`;
 const shortHash = (s: string) => ownerHashOf(s).slice(0, 8);
 
@@ -117,9 +126,15 @@ export class AgentRunManager {
   private ready: Promise<void>;
   private recentEvidence = new Map<string, { at: number; items: AnyEvidence[] }>();
   private uploads = new Map<string, number[]>();
+  /** real-model questions are paid: a per-session ceiling on top of the HTTP rate limit and the provider's own process-wide budget */
+  private aiAsks = new SlidingWindowLimiter({ windowMs: 10 * 60_000, max: 12 });
+  /** the operator's words for a run (not persisted): lets the narrative answer the actual question */
+  private userRequests = new Map<string, string>();
+  private readonly createdAtMs: number;
   private o: Required<Omit<ManagerOptions, "hooks" | "semantics" | "stateProbe" | "backend">> & Pick<ManagerOptions, "hooks" | "semantics" | "stateProbe"> & { backend: ExecutionBackend };
 
   constructor(opts: ManagerOptions) {
+    this.createdAtMs = (opts.now ?? Date.now)();
     this.o = { uploadQuota: { perWindow: UPLOAD_LIMITS.maxUploadsPerWindow, windowMs: UPLOAD_LIMITS.uploadWindowMs }, runTimeoutMs: 30_000, toolTimeoutMs: 10_000, maxConcurrentRuns: 2, quotaPerWindow: 20, quotaWindowMs: 10 * 60_000, maxRetryDepth: 2, now: Date.now, backend: new SimulatedExecutionBackend(), ...opts };
     this.ready = this.o.store.recoverInterruptedAgentRuns(new Date(this.o.now()).toISOString()).then((c) => {
       if (c) log("warn", "agent.recovered_interrupted_runs", { count: c });
@@ -177,9 +192,15 @@ export class AgentRunManager {
     };
   }
 
+  /** What THIS instance (the one answering requests) is actually running with: lets an operator verify the live process, not just the files on disk. No secrets. */
+  runtimeInfo(names: string[]) {
+    const p = this.o.provider as { model?: string | null };
+    return { routing: AGENT_ROUTING_VERSION, createdAt: new Date(this.createdAtMs).toISOString(), dataMode: this.o.svc.mode, provider: { kind: this.o.provider.kind, id: this.o.provider.id, model: p.model ?? null }, allowed: names.filter((n) => this.o.svc.isAllowed(n)) };
+  }
+
   // =============================================================================================== public: message entry
   /** Handles one operator message: parse (deterministic) → refuse / clarify / answer from the report / start a read-only investigation. */
-  async handleMessage(req: { sessionId: string; conversationId?: string | null; text: string }): Promise<{ conversationId: string; messages: ConversationMessage[]; runId: string | null; proposalId: string | null }> {
+  async handleMessage(req: { sessionId: string; conversationId?: string | null; text: string; askModel?: boolean }): Promise<{ conversationId: string; messages: ConversationMessage[]; runId: string | null; proposalId: string | null }> {
     await this.ready;
     const owner = ownerHashOf(req.sessionId);
     let conv: ConversationRecord;
@@ -194,8 +215,31 @@ export class AgentRunManager {
     const text = String(req.text ?? "").slice(0, MAX_MESSAGE_CHARS + 1);
     out.push(await this.say(conv, "user", "user", text.slice(0, MAX_MESSAGE_CHARS), {}, true));
 
-    const parsed = parseIntent(text, await this.parseContext(conv));
+    const pctx = await this.parseContext(conv);
+    const parsed = parseIntent(text, pctx);
     await this.audit(null, "intent_parsed", { conversationId: conv.id, kind: parsed.kind, intent: parsed.kind === "resolved" ? parsed.intent : null, reason: parsed.kind === "resolved" ? null : parsed.reason, rules: parsed.kind === "resolved" ? parsed.rules : [] });
+
+    const live = this.o.provider.kind === "live" && typeof this.o.provider.answer === "function";
+    // EVIDENCE FIRST: a troubleshooting request (slow / HTTP 500 / restarts / deployments / "look at my logs, CPU, RAM") is never answered from the model alone — the
+    // read-only tools collect what the Liara API supports, and only then is the (optional) analysis written from that evidence. This holds for the "ask the model" button too.
+    const operational = isOperational(text, pctx.apps);
+    const incident = this.incidentIntent(parsed, operational, text);
+    if (incident) return this.evidenceFirst(conv, req.sessionId, text, incident, parsed, out);
+    const investigative = parsed.kind === "resolved" && (INVESTIGATIVE as readonly string[]).includes(parsed.intent);
+    // Free-form guidance from the real model: explicit request ("ask the model") or a request the deterministic parser cannot map. Safety refusals are never routed to it.
+    const refusalReasons = ["blocked_action", "policy_override", "empty", "too_long"];
+    // an unknown app named together with a problem report stays a deterministic refusal (no existence oracle, no model-only "investigation")
+    const refused = parsed.kind === "unsupported" && (refusalReasons.includes(parsed.reason) || (parsed.reason === "unknown_app" && mentionsOwnServiceProblem(text)));
+    // a message about the operator's OWN service is never answered by the model alone — not even by the "ask the model" button: the deterministic clarification/investigation applies
+    if (req.askModel && !refused && !investigative && !operational) {
+      if (!live) {
+        out.push(await this.say(conv, "agent", "refusal", fa.ai.askNotEnabled, { intent: "unsupported" }));
+        return { conversationId: conv.id, messages: out, runId: null, proposalId: null };
+      }
+      return this.askModel(conv, req.sessionId, text.slice(0, MAX_MESSAGE_CHARS), out);
+    }
+    // Automatic routing is deliberately narrow: only what the deterministic parser could not map. Everything it CAN map (including deployment questions that need the upload) stays deterministic.
+    if (live && ((parsed.kind === "unsupported" && parsed.reason === "unsupported_request") || (parsed.kind === "clarify" && parsed.reason === "ambiguous_intent"))) return this.askModel(conv, req.sessionId, text.slice(0, MAX_MESSAGE_CHARS), out);
 
     if (parsed.kind === "unsupported") {
       out.push(await this.say(conv, "agent", "refusal", parsed.messageFa, { intent: parsed.reason === "policy_override" || parsed.reason === "blocked_action" ? "unsupported" : "unsupported", suggestions: parsed.suggestions.slice(0, 5) }));
@@ -238,27 +282,99 @@ export class AgentRunManager {
       default: {
         const app = parsed.app!;
         out.push(await this.say(conv, "agent", "ack", fa.ack(parsed.intent, app, parsed.windowNoteFa), { intent: parsed.intent }));
-        try {
-          const run = await this.startInvestigation({ sessionId: req.sessionId, conv, app, intent: parsed.intent, windowMinutes: parsed.windowMinutes ?? 60, retryOf: null });
-          return { conversationId: conv.id, messages: out, runId: run.id, proposalId: null };
-        } catch (e) {
-          if (isAgentError(e)) {
-            const msgs: Partial<Record<string, string>> = { run_in_progress: "برای این برنامه هم‌اکنون یک بررسی در حال اجراست؛ منتظر پایان آن بمانید.", too_many_runs: "تعداد بررسی‌های هم‌زمان به سقف رسیده است؛ کمی صبر کنید.", run_quota_exceeded: "سهمیهٔ بررسی این بازه تمام شد؛ بعداً دوباره تلاش کنید." };
-            out.push(await this.say(conv, "agent", "refusal", msgs[e.code] ?? "شروع بررسی ممکن نشد.", { intent: parsed.intent, ...(e.extra.existingRunId ? { runId: e.extra.existingRunId } : {}) }));
-            return { conversationId: conv.id, messages: out, runId: e.extra.existingRunId ?? null, proposalId: null };
-          }
-          if (isLiaraError(e)) {
-            out.push(await this.say(conv, "agent", "refusal", "برنامهٔ مورد نظر در فهرست مجاز نیست.", { intent: parsed.intent }));
-            return { conversationId: conv.id, messages: out, runId: null, proposalId: null };
-          }
-          throw e;
-        }
+        return this.runInvestigationReply(conv, req.sessionId, app, parsed.intent, parsed.windowMinutes ?? 60, text, out);
       }
     }
   }
 
+  /**
+   * Which message is a troubleshooting request that needs EVIDENCE before any analysis? (read-only intent; no authority.)
+   *  - several symptoms in one message (e.g. slow + HTTP 500) → ONE investigation with the superset of sources (the engine's `why_slow` covers CPU, RAM, logs, events, releases)
+   *  - a request the keyword parser cannot map but that asks for live data (logs, CPU, RAM, metrics, status, last deployment, "real data") → a broad investigation
+   */
+  private incidentIntent(parsed: ParseResult, operational: boolean, text: string): AgentIntent | null {
+    // several symptoms incl. a real one (slow / HTTP 500): "what is the difference between restart and redeploy?" is a knowledge question, not an incident
+    if (parsed.kind === "clarify" && parsed.reason === "ambiguous_intent" && (parsed.candidates?.length ?? 0) >= 2 && parsed.candidates!.some((c) => c === "investigate_slow" || c === "investigate_http500")) {
+      const c = parsed.candidates!;
+      return c.includes("investigate_slow") ? "investigate_slow" : c.includes("investigate_http500") ? "investigate_http500" : c.includes("investigate_restarts") ? "investigate_restarts" : c[0]!;
+    }
+    // anything else the keyword parser could not map but that is about the operator's own service (see operational.ts) is investigated, never answered model-only
+    if (operational && ((parsed.kind === "unsupported" && parsed.reason === "unsupported_request") || (parsed.kind === "clarify" && parsed.reason === "ambiguous_intent"))) return broadIntent(text);
+    return null;
+  }
+
+  /** The app is resolved ONLY from the authorised list (text match → conversation → the single authorised app); an unknown/ambiguous app is asked about, never guessed or looked up. */
+  private async evidenceFirst(conv: ConversationRecord, sessionId: string, text: string, intent: AgentIntent, parsed: ParseResult, out: ConversationMessage[]) {
+    const done = (runId: string | null = null) => ({ conversationId: conv.id, messages: out, runId, proposalId: null });
+    const ctx = await this.parseContext(conv);
+    if (ctx.apps.length === 0) {
+      out.push(await this.say(conv, "agent", "refusal", fa.ai.noApps, { intent }));
+      return done();
+    }
+    const { found } = extractApps(normalize(text).spaced, ctx.apps);
+    const parserApp = parsed.kind === "clarify" ? (parsed.app ?? null) : null;
+    const app = found.length === 1 ? found[0]! : found.length > 1 ? null : (parserApp ?? ctx.lastApp ?? (ctx.apps.length === 1 ? ctx.apps[0]! : null));
+    if (!app || !ctx.apps.includes(app)) {
+      out.push(await this.say(conv, "agent", "clarification", fa.ai.chooseApp, { intent: "ambiguous", suggestions: (found.length > 1 ? found : ctx.apps).slice(0, 6).map((a) => `${text.trim().slice(0, 440)} (${a})`) }));
+      return done();
+    }
+    const windowMinutes = (parsed.kind === "clarify" ? parsed.windowMinutes : null) ?? 60;
+    out.push(await this.say(conv, "agent", "ack", `${fa.ack(intent, app)} ${fa.ai.evidenceAckExtra}`, { intent }));
+    return this.runInvestigationReply(conv, sessionId, app, intent, windowMinutes, text, out);
+  }
+
+  /** Starts the read-only investigation and turns its refusal reasons into messages (shared by every route into an investigation). */
+  private async runInvestigationReply(conv: ConversationRecord, sessionId: string, app: string, intent: AgentIntent, windowMinutes: number, text: string, out: ConversationMessage[]) {
+    try {
+      const run = await this.startInvestigation({ sessionId, conv, app, intent, windowMinutes, retryOf: null, userRequest: text.slice(0, MAX_MESSAGE_CHARS) });
+      return { conversationId: conv.id, messages: out, runId: run.id, proposalId: null };
+    } catch (e) {
+      if (isAgentError(e)) {
+        const msgs: Partial<Record<string, string>> = { run_in_progress: "برای این برنامه هم‌اکنون یک بررسی در حال اجراست؛ منتظر پایان آن بمانید.", too_many_runs: "تعداد بررسی‌های هم‌زمان به سقف رسیده است؛ کمی صبر کنید.", run_quota_exceeded: "سهمیهٔ بررسی این بازه تمام شد؛ بعداً دوباره تلاش کنید." };
+        out.push(await this.say(conv, "agent", "refusal", msgs[e.code] ?? "شروع بررسی ممکن نشد.", { intent, ...(e.extra.existingRunId ? { runId: e.extra.existingRunId } : {}) }));
+        return { conversationId: conv.id, messages: out, runId: e.extra.existingRunId ?? null, proposalId: null };
+      }
+      if (isLiaraError(e)) {
+        out.push(await this.say(conv, "agent", "refusal", "برنامهٔ مورد نظر در فهرست مجاز نیست.", { intent }));
+        return { conversationId: conv.id, messages: out, runId: null, proposalId: null };
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Advice from the REAL model (provider.answer). Text only: the answer is sanitised, attributed (source + model + tokens) and stored as an `ai_answer` message;
+   * it can never start a run, create a proposal or approve anything. A failure is stored as an `ai_error` (no canned substitute). No prompt/answer text is audited.
+   */
+  private async askModel(conv: ConversationRecord, sessionId: string, question: string, out: ConversationMessage[]) {
+    const done = { conversationId: conv.id, messages: out, runId: null, proposalId: null };
+    const owner = ownerHashOf(sessionId);
+    const fail = async (code: string, extra: Partial<ConversationMessage> = {}) => {
+      out.push(await this.say(conv, "agent", "ai_error", fa.ai.errors[code] ?? fa.ai.errors.provider_error!, { intent: "unsupported", ai: { source: "boxapi", error: code }, ...extra }));
+      await this.audit(null, "ai_answer", { conversationId: conv.id, ok: false, error: code, actor: shortHash(sessionId) });
+      return done;
+    };
+    if (!this.aiAsks.take(owner).allowed) {
+      out.push(await this.say(conv, "agent", "ai_error", fa.ai.localLimit, { intent: "unsupported", ai: { source: "boxapi", error: "rate_limited" } }));
+      return done;
+    }
+    let apps: string[] = [];
+    try {
+      apps = await this.apps();
+    } catch {
+      apps = [];
+    }
+    const r = await this.o.provider.answer!({ questionFa: question, apps, dataMode: this.o.svc.mode }, { timeoutMs: 25_000 });
+    if (!r.ok) return fail(r.error);
+    const text = redactText(r.textFa, { maxLength: 2000 }).trim();
+    if (!text || injectionSuspect(text) || actionClaimSuspect(text)) return fail("invalid_output");
+    out.push(await this.say(conv, "agent", "ai_answer", text, { intent: "unsupported", ai: { source: "boxapi", model: r.model, ...(r.usage ? { usage: r.usage } : {}), ...(r.truncated ? { truncated: true } : {}) } }));
+    await this.audit(null, "ai_answer", { conversationId: conv.id, ok: true, model: r.model, tokens: r.usage?.totalTokens ?? null, chars: text.length, actor: shortHash(sessionId) });
+    return done;
+  }
+
   // =============================================================================================== investigation runs
-  private startInvestigation(req: { sessionId: string; conv: ConversationRecord; app: string; intent: AgentIntent; windowMinutes: number; retryOf: string | null }): Promise<AgentRunRecord> {
+  private startInvestigation(req: { sessionId: string; conv: ConversationRecord; app: string; intent: AgentIntent; windowMinutes: number; retryOf: string | null; userRequest?: string }): Promise<AgentRunRecord> {
     return this.serial(async () => {
       await this.ready;
       const { store, svc } = this.o;
@@ -281,9 +397,13 @@ export class AgentRunManager {
       const ac = new AbortController();
       const entry: Active = { ac, reason: null, done: Promise.resolve() };
       this.active.set(run.id, entry);
+      if (req.userRequest) this.userRequests.set(run.id, req.userRequest.slice(0, MAX_MESSAGE_CHARS));
       entry.done = this.execute(run, entry, req.conv)
         .catch((e: unknown) => log("error", "agent.run_unrecoverable", { runId: run.id, name: (e as { name?: string })?.name }))
-        .finally(() => this.active.delete(run.id));
+        .finally(() => {
+          this.active.delete(run.id);
+          this.userRequests.delete(run.id);
+        });
       return accepted;
     });
   }
@@ -363,7 +483,7 @@ export class AgentRunManager {
       const mode = this.o.svc.mode;
       const ctx: ToolContext = {
         svc: this.o.svc, runId: run.id, app: run.app, windowMinutes: run.windowMinutes as WindowMinutes, now: this.o.now, sourceTimeoutMs: this.o.toolTimeoutMs, signal: a.ac.signal,
-        budget: { max: plan.budget.maxToolCalls, used: 0 }, evidence, provider: this.o.provider, semantics: (this.o.semantics ?? semanticsFor)(run.app, mode), report,
+        budget: { max: plan.budget.maxToolCalls, used: 0 }, evidence, provider: this.o.provider, userRequest: this.userRequests.get(run.id), semantics: (this.o.semantics ?? semanticsFor)(run.app, mode), report,
         audit: (event, data) => this.audit(run.id, event, data), actor: "agent",
       };
 

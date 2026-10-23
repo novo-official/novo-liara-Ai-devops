@@ -3,6 +3,7 @@ import { balanceStatus, cliOffersPlan, corroborateUnits, PUBLIC_PRICING_SNAPSHOT
 import { DEFAULT_ESTIMATE_HOURS } from "./plans";
 import type { PlanUnits } from "./units";
 import { APP_NAME_REGEX } from "../config/env";
+import { markerIsSpecific } from "./existing";
 
 /**
  * FINAL LIVE-DEPLOYMENT PREFLIGHT (Phase 2B). A PURE function: it receives what the read-only layer already observed and the operator's configuration, and
@@ -154,7 +155,8 @@ export function buildPreflight(i: PreflightInput): PreflightReport {
   const idPresent = nets && c.networkId ? nets.some((n) => n.id === c.networkId) : null;
   checks.push(check("network_exists", "configuration", nets === null ? "info" : nets.length === 0 ? "blocked" : idPresent === false ? "blocked" : idPresent === true ? "ok" : "info", nets ? ["live_verified", "cli_observed"] : ["not_tested"], "شبکهٔ انتخاب‌شده وجود دارد", nets === null ? "بدون خواندن فهرست شبکه‌ها قابل بررسی نیست." : nets.length === 0 ? "هیچ شبکه‌ای در حساب نیست؛ CLI رسمی در این حالت ساخت را رد می‌کند. شبکه را دستی (کنسول یا CLI) بسازید — این ابزار شبکه نمی‌سازد." : idPresent === false ? "شناسهٔ تنظیم‌شده در فهرست شبکه‌ها نیست." : idPresent === true ? "شناسهٔ تنظیم‌شده دقیقاً در فهرست شبکه‌های حساب هست." : "شناسهٔ شبکه تنظیم نشده."));
   checks.push(check("app_domain_suffix", "configuration", c.appDomainSuffixes.length ? "ok" : "blocked", ["operator_declared"], "دامنهٔ بررسی سلامت", c.appDomainSuffixes.length ? "دامنهٔ مورد اعتماد برای بررسی سلامت HTTP تنظیم شده است." : "دامنهٔ پیش‌فرض برنامه برای بررسی سلامت تنظیم نشده؛ بدون آن «DEPLOYED» اعلام نمی‌شود."));
-  checks.push(check("health_marker", "configuration", c.healthMarker ? "ok" : "blocked", ["operator_declared"], "نشانگر سلامت قطعی", c.healthMarker ? "پاسخ /health باید این نشانگر را داشته باشد." : "بدون نشانگر قطعی، فقط کد ۲۰۰ بررسی می‌شود؛ برای اولین استقرار باید LIARA_LIVE_HEALTH_MARKER تنظیم شود."));
+  const markerSpecific = markerIsSpecific(c.healthMarker); // same rule as the existing-app check: a marker that matches almost any page proves nothing
+  checks.push(check("health_marker", "configuration", markerSpecific ? "ok" : "blocked", ["operator_declared"], "نشانگر سلامت قطعی", markerSpecific ? "پاسخ /health باید این نشانگر را داشته باشد." : c.healthMarker ? "نشانگر تنظیم‌شده عمومی یا کوتاه است و تقریباً در هر پاسخی پیدا می‌شود؛ برای اولین استقرار باید LIARA_LIVE_HEALTH_MARKER را به عبارتی اختصاصی (دست‌کم ۸ نویسه، مثلاً نام برنامه) تغییر دهید." : "بدون نشانگر قطعی، فقط کد ۲۰۰ بررسی می‌شود؛ برای اولین استقرار باید LIARA_LIVE_HEALTH_MARKER تنظیم شود."));
   const sensitive = i.runBlockers.filter((b) => !b.startsWith("sensitive_files"));
   checks.push(check("project_ready", "configuration", sensitive.length ? "blocked" : "ok", ["live_verified"], "آمادگی پروژه", sensitive.length ? `موانع پروژه: ${sensitive.join("، ")}` : "تحلیل ایستا مانعی نیافت."));
 

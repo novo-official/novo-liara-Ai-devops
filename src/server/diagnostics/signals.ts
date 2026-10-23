@@ -97,6 +97,14 @@ export function http5xx(s: string): number[] {
 export const injectionSuspect = (s: string): boolean =>
   /((ignore|disregard|forget)\s+(all\s+)?(the\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?)|system prompt|you are now\b|new instructions?\s*:|\bact as\b|\bsudo\b|rm\s+-rf|curl\s+[^|\n]*\|\s*(?:ba)?sh|(delete|remove|destroy)\s+(the\s+)?(app|application|database)|(restart|redeploy|scale)\s+(the\s+)?(app|application)\b|<\/?(system|assistant|user)>|\[INST\])/i.test(s);
 
+/**
+ * A model must never CLAIM to have performed or approved something: nothing it writes is executed, and the only record of an action is the backend's own.
+ * First-person completion claims (Persian/English) and approval/forged-flag strings are withheld rather than shown. Defence in depth — the real guarantee is that
+ * model text has no path to the policy engine, proposals or the executor.
+ */
+export const actionClaimSuspect = (s: string): boolean =>
+  /((?:ری‌?استارت|ریبوت|اجرا|دیپلوی|مستقر|حذف|پاک|تغییر|مقیاس|خاموش|روشن|متوقف|ارتقا|اعمال|فعال|غیرفعال|تنظیم|تایید|تأیید)\s*(?:را|رو)?\s*(?:ثبت\s*)?(?:کردم|دادم|زدم|نمودم)|انجام\s*دادم|approved?\s*=\s*true|auto[\s-]?approv|\bI(?:\s+have|'ve)?\s+(?:just\s+)?(?:restarted|rebooted|deployed|redeployed|scaled|deleted|removed|changed|applied|executed|ran|approved|stopped|started)\b)/i.test(s);
+
 // ---- display excerpts ----
 const pseudo = new Pseudonymizer();
 /** Shareable-redacted, capped excerpt of untrusted text. Hosts/IPs/paths are pseudonymised. */

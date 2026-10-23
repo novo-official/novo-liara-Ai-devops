@@ -2,9 +2,9 @@ import { availabilityLabel, caveatText, confidenceLabel, findingText, hypothesis
 import { redactText } from "../security/redact";
 import type { Analysis } from "./engine";
 import type { EvidenceSet } from "./evidence-set";
-import { injectionSuspect } from "./signals";
+import { actionClaimSuspect, excerpt, injectionSuspect } from "./signals";
 import type { AnyEvidence, Availability, Confidence, Hypothesis, Intent, Recommendation, SourceKey } from "./types";
-import type { DiagnosticLLMProvider, LLMContext, LLMErrorCode } from "./llm/provider";
+import type { DiagnosticLLMProvider, LLMContext, LLMErrorCode, LLMUsage } from "./llm/provider";
 import { NarrativeSchema } from "./llm/provider";
 
 const safe = (s: unknown, max = 120): string => redactText(String(s ?? ""), { shareable: true, maxLength: max });
@@ -31,13 +31,19 @@ export interface EvidenceSummary {
   excerpts: string[];
 }
 
-export type NarrativeStatus = "ok" | "unavailable" | "disabled" | "timeout" | "error" | "invalid" | "cancelled";
+export type NarrativeStatus = "ok" | "unavailable" | "disabled" | "timeout" | "error" | "invalid" | "cancelled" | "not_configured" | "no_evidence";
 export interface ReportNarrative {
   status: NarrativeStatus;
-  source: "mock-simulated" | "none";
+  /** who wrote `textFa`: the offline mock, a real model through BoxAPI, or nobody */
+  source: "mock-simulated" | "boxapi" | "none";
   textFa?: string;
   citedEvidenceIds: string[];
   providerId?: string;
+  /** real provider only: the model that produced the text and the token accounting it reported */
+  model?: string;
+  usage?: LLMUsage;
+  /** why a real provider produced nothing (set only when status is not "ok") */
+  failure?: LLMErrorCode;
 }
 
 export interface ReportItem {
@@ -139,9 +145,34 @@ function hypothesisReport(h: Hypothesis): DiagnosticReport["hypotheses"][number]
   };
 }
 
-export function llmContext(args: { app: string; intent: Intent; analysis: Analysis; simulated: boolean }): LLMContext {
+const ERRORISH = /(error|exception|fatal|panic|traceback|timeout|timed out|refused|econn|oom|killed|unhandled|failed|\b5\d\d\b)/i;
+
+/** What the real model is allowed to know about the evidence: provenance + compact summaries (never raw payloads, env values or whole logs). */
+function evidenceFacts(evidence: EvidenceSet): NonNullable<LLMContext["evidence"]> {
+  return evidence.items.map((e) => {
+    const s = toEvidenceSummary(e, []);
+    const { envKeys: _omit, ...summary } = s.summary as Record<string, unknown>;
+    void _omit;
+    return { id: s.id, source: s.source, sourceFa: s.sourceFa, availability: s.availability, freshness: s.freshness, verification: String(s.verification), errorCode: s.errorCode ?? null, mode: s.mode, simulated: s.simulated, collectedAt: s.collectedAt, window: s.window ? { from: s.window.from, to: s.window.to } : null, summary, notes: s.notes.slice(0, 3).map((n) => safe(n, 160)) };
+  });
+}
+
+function logSamples(evidence: EvidenceSet, max = 6): NonNullable<LLMContext["logSamples"]> {
+  const logs = evidence.data("logs");
+  const id = evidence.idOf("logs");
+  if (!logs || !id) return [];
+  return logs.lines
+    .filter((l) => ERRORISH.test(l.message))
+    .sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")))
+    .slice(0, max)
+    .map((l) => ({ evidenceId: id, time: l.time, text: excerpt(l.message, 160) }));
+}
+
+export function llmContext(args: { app: string; intent: Intent; analysis: Analysis; simulated: boolean; evidence?: EvidenceSet; userRequest?: string }): LLMContext {
   const { diagnosis } = args.analysis;
   return {
+    ...(args.evidence ? { evidence: evidenceFacts(args.evidence), logSamples: logSamples(args.evidence) } : {}),
+    ...(args.userRequest ? { userRequestFa: args.userRequest.slice(0, 500) } : {}),
     intent: args.intent,
     app: args.app,
     simulatedData: args.simulated,
@@ -156,9 +187,9 @@ export function llmContext(args: { app: string; intent: Intent; analysis: Analys
 
 /** Calls the (offline) provider with a hard timeout and validates the output. Failure never blocks the deterministic report. */
 export async function buildNarrative(provider: DiagnosticLLMProvider, ctx: LLMContext, knownEvidenceIds: Set<string>, opts: { timeoutMs: number; signal?: AbortSignal }): Promise<ReportNarrative> {
-  const source = provider.simulated ? ("mock-simulated" as const) : ("none" as const);
+  const source = provider.simulated ? ("mock-simulated" as const) : provider.kind === "live" ? ("boxapi" as const) : ("none" as const);
   if (provider.kind === "disabled") return { status: "disabled", source: "none", citedEvidenceIds: [], providerId: provider.id };
-  const fail = (status: NarrativeStatus): ReportNarrative => ({ status, source, citedEvidenceIds: [], providerId: provider.id });
+  const fail = (status: NarrativeStatus, failure?: LLMErrorCode): ReportNarrative => ({ status, source, citedEvidenceIds: [], providerId: provider.id, ...(failure ? { failure } : {}) });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const raced = await Promise.race([
@@ -167,13 +198,16 @@ export async function buildNarrative(provider: DiagnosticLLMProvider, ctx: LLMCo
         timer = setTimeout(() => resolve({ ok: false, error: "timeout" }), opts.timeoutMs);
       }),
     ]);
-    if (!raced.ok) return fail(raced.error === "timeout" ? "timeout" : raced.error === "provider_disabled" ? "disabled" : raced.error === "cancelled" ? "cancelled" : "error");
+    if (!raced.ok) return fail(raced.error === "timeout" ? "timeout" : raced.error === "provider_disabled" ? "disabled" : raced.error === "cancelled" ? "cancelled" : raced.error === "not_configured" ? "not_configured" : "error", raced.error);
     const parsed = NarrativeSchema.safeParse(raced); // strips any extra fields (e.g. forged "actions")
     if (!parsed.success) return fail("invalid");
     const { narrativeFa, citedEvidenceIds } = parsed.data;
     if (citedEvidenceIds.some((id) => !knownEvidenceIds.has(id))) return fail("invalid"); // citation integrity applies to LLM text too
     if (injectionSuspect(narrativeFa)) return fail("invalid"); // never surface instruction-like output
-    return { status: "ok", source, textFa: safe(narrativeFa, 1500), citedEvidenceIds, providerId: provider.id };
+    if (source === "boxapi" && actionClaimSuspect(narrativeFa)) return fail("invalid"); // a model cannot claim an action or an approval: only the backend's records count
+    const live = source === "boxapi" ? { ...("model" in raced && raced.model ? { model: String(raced.model).slice(0, 100) } : {}), ...("usage" in raced && raced.usage ? { usage: raced.usage } : {}) } : {};
+    // a real model's prose is only secret-redacted (hosts/IPs stay readable); the mock text keeps the stricter shareable transform
+    return { status: "ok", source, textFa: source === "boxapi" ? redactText(narrativeFa, { maxLength: 1500 }) : safe(narrativeFa, 1500), citedEvidenceIds, providerId: provider.id, ...live };
   } catch {
     return fail("error");
   } finally {

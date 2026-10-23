@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ArtifactBinding } from "@/components/artifact-binding";
 import { LiveDeploymentView, PreviewCard } from "@/components/live-deployment";
+import { toPublicLive } from "@/lib/live-public";
+import type { LiveStatus } from "@/server/live/service";
 import { liveUi } from "@/i18n/live-fa";
 import { LIVE_STATES } from "@/server/live/types";
 import { approved, deploy, harness, OWNER, propose, settle } from "../helpers/live-exec";
@@ -10,7 +12,9 @@ import { assertNoCanary } from "../helpers/canaries";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => undefined, refresh: () => undefined }) }));
 
-const render = async (h: Awaited<ReturnType<typeof harness>>, artifact?: ArtifactBinding) => renderToStaticMarkup(<LiveDeploymentView status={await h.svc.status(OWNER, h.runId)} runId={h.runId} defaultApp="" section="new" artifact={artifact} onChanged={() => undefined} />);
+/** the browser only ever receives the public shape (routes apply toPublicLive), so the UI is rendered from exactly that */
+const publicStatus = async (h: Awaited<ReturnType<typeof harness>>) => toPublicLive(await h.svc.status(OWNER, h.runId)) as unknown as LiveStatus;
+const render = async (h: Awaited<ReturnType<typeof harness>>, artifact?: ArtifactBinding) => renderToStaticMarkup(<LiveDeploymentView status={await publicStatus(h)} runId={h.runId} defaultApp="" section="new" artifact={artifact} onChanged={() => undefined} />);
 const SELECTED: ArtifactBinding = { file: new File([new Uint8Array(4)], "my-site.zip"), sha256: "ab".repeat(32), state: "match", fromUpload: false, set: () => undefined };
 /** the CREATE-new-app form only (the existing-app form has its own fieldset) */
 const createForm = (html: string) => /<form[^>]*data-testid="live-form"[\s\S]*?<\/form>/.exec(html)?.[0] ?? "";
@@ -51,7 +55,10 @@ describe("live panel (server-rendered markup from the real status document)", ()
     const h = await harness();
     const v = await propose(h);
     const html = await render(h);
-    for (const must of [v.proposal.appName, v.proposal.planId, v.proposal.bundlePlanId, v.proposal.networkId, v.proposal.digest, v.proposal.artifact.zipSha256, v.proposal.artifact.artifactDigest, v.proposal.operationId, "team_demo_1"]) expect(html, must).toContain(must);
+    for (const must of [v.proposal.appName, v.proposal.planId, v.proposal.bundlePlanId, v.proposal.networkId, v.proposal.digest, v.proposal.artifact.zipSha256, v.proposal.artifact.artifactDigest, v.proposal.operationId]) expect(html, must).toContain(must);
+    expect(html).toContain(liveUi.proposal.teamScope); // team-bound proposal: the coarse scope is shown…
+    expect(html).not.toContain("team_demo_1"); // …never the raw team id
+    expect(html).not.toContain(v.proposal.ownerHash.slice(0, 8)); // …nor any part of the operator hash
     expect(html).toContain('data-testid="live-confirm-input"');
     expect(html).toContain(liveUi.proposal.typeName(v.proposal.appName));
     expect(tag(html, "live-approve")).toMatch(/\sdisabled/);
@@ -168,7 +175,7 @@ describe("Phase 2B: final preflight summary in the panel", () => {
 describe("Phase 2E: existing-application deployment UI", () => {
   const APP = "liara-agent-demo";
   const ready = { verdict: "READY", frameworkFa: "Next.js" };
-  const renderEx = async (h: Awaited<ReturnType<typeof harness>>, readiness: { verdict: string; frameworkFa: string } | null = ready) => renderToStaticMarkup(<LiveDeploymentView status={await h.svc.status(OWNER, h.runId)} runId={h.runId} defaultApp="" readiness={readiness} onChanged={() => undefined} />);
+  const renderEx = async (h: Awaited<ReturnType<typeof harness>>, readiness: { verdict: string; frameworkFa: string } | null = ready) => renderToStaticMarkup(<LiveDeploymentView status={await publicStatus(h)} runId={h.runId} defaultApp="" readiness={readiness} onChanged={() => undefined} />);
   const withApp = async (over: Parameters<typeof harness>[0] = {}) => {
     const h = await harness(over);
     h.fake.apps.add(APP);
@@ -285,7 +292,7 @@ describe("Phase 2E: existing-application deployment UI", () => {
 
 describe("existing-app path UX (server-rendered): one next action, one ZIP input, preview separated from execution", () => {
   const ready = { verdict: "READY", frameworkFa: "Next.js" };
-  const renderPath = async (h: Awaited<ReturnType<typeof harness>>, artifact?: ArtifactBinding) => renderToStaticMarkup(<LiveDeploymentView status={await h.svc.status(OWNER, h.runId)} runId={h.runId} defaultApp="" readiness={ready} artifact={artifact} onChanged={() => undefined} />);
+  const renderPath = async (h: Awaited<ReturnType<typeof harness>>, artifact?: ArtifactBinding) => renderToStaticMarkup(<LiveDeploymentView status={await publicStatus(h)} runId={h.runId} defaultApp="" readiness={ready} artifact={artifact} onChanged={() => undefined} />);
   const action = (html: string) => /data-testid="live-next-action" data-action="([a-z_]+)"/.exec(html)?.[1];
 
   it("exactly ONE file input on the primary path, and no create-new-app content at all", async () => {
@@ -301,7 +308,7 @@ describe("existing-app path UX (server-rendered): one next action, one ZIP input
   });
   it("the new-app path is a separate section that carries the pricing/network prerequisites and also has exactly one file input", async () => {
     const h = await harness();
-    const html = renderToStaticMarkup(<LiveDeploymentView status={await h.svc.status(OWNER, h.runId)} runId={h.runId} defaultApp="" readiness={ready} section="new" onChanged={() => undefined} />);
+    const html = renderToStaticMarkup(<LiveDeploymentView status={await publicStatus(h)} runId={h.runId} defaultApp="" readiness={ready} section="new" onChanged={() => undefined} />);
     expect(html).toContain('data-testid="live-create-new"');
     expect(html).not.toContain('data-testid="live-existing"');
     expect(html).toMatch(/data-prereq="plan_units_verified"/);

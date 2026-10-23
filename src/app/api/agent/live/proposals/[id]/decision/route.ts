@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, apiJson, guardedAction } from "@/server/security/guard";
+import { toPublicLive } from "@/lib/live-public";
 import { getLiveService } from "@/server/live/runtime";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,6 @@ export async function POST(req: Request, { params }: Ctx) {
     if (!/^lprop_\d{14}_[0-9a-f]{8}$/.test(id)) return apiError("live_not_found");
     const parsed = Body.safeParse(body);
     if (!parsed.success) return apiError("bad_request");
-    return apiJson(await getLiveService().decide(id, session.id, parsed.data));
+    return apiJson(toPublicLive(await getLiveService().decide(id, session.id, parsed.data)));
   });
 }

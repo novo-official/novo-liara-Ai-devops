@@ -1,3 +1,4 @@
+import type { ProbeFailure, ProbeOutcome } from "./probe";
 /**
  * Live deployment types (Phase 2A). Everything in `src/server/live/` is SEPARATE from the mock simulator (`deploy/simulator.ts`), from the read-only
  * Liara client (`liara/*`) and from the Phase 1D/1E proposal engine: live proposals and approvals have their own types, tables and digests.
@@ -165,6 +166,61 @@ export interface VerificationLadder {
 }
 export const EMPTY_LADDER: VerificationLadder = { apiAcceptedRequest: "unknown", sourceUploaded: "unknown", releaseCreated: "unknown", buildCompleted: "unknown", runtimeStarted: "unknown", httpHealthVerified: "unknown" };
 
+/** One HTTP health observation, exactly as made — with WHEN and by WHAT. Contains no header, body text, address or certificate detail. */
+export interface HealthObservation {
+  source: "http_probe";
+  /** ISO time of the observation (never back-filled for records that do not have it) */
+  observedAt: string;
+  outcome: ProbeOutcome;
+  status: number | null;
+  markerRequired: boolean;
+  /** null = no marker configured or no body inspected */
+  markerMatched: boolean | null;
+  /** coarse reason when the probe did not verify (dns / tls / connection / timeout / http_status / marker_mismatch …) */
+  failure: ProbeFailure | null;
+  durationMs: number | null;
+}
+
+/** What the applets endpoint gave: kept SEPARATE from the health probe — an unreadable applets list is "no information", never "the app is down". */
+export interface AppletsObservation {
+  observedAt: string;
+  readable: boolean;
+  runtimeClass: string | null;
+  appletCount: number | null;
+  /** error code class of the read when it was not readable (e.g. upstream_error for an HTTP 500) */
+  failure: string | null;
+}
+
+/**
+ * Provenance of the runtime fact and of the evidence behind the verification, recorded WITH the ladder (optional ⇒ older records stay valid and are shown as
+ * "not recorded", never reconstructed): `runtime` = observed (applets read) / inferred (applets unreadable + marker-verified HTTPS answer of the current READY
+ * release) / unknown.
+ */
+export interface VerificationEvidence {
+  runtime: "observed" | "inferred" | "unknown";
+  /** the applets list was readable (`false` ⇒ Liara's API errored, e.g. HTTP 500) */
+  appletsReadable: boolean | null;
+  /** when this evidence was gathered (the verification run that produced the ladder) */
+  observedAt?: string;
+  /** `null` = no probe was run in that observation; absent = not recorded */
+  health?: HealthObservation | null;
+  applets?: AppletsObservation | null;
+}
+
+/**
+ * A FRESH, read-only runtime check of a finished deployment. It never changes the operation's state, ladder or `evidence` (the historical record of the
+ * deployment) — it sits next to them. A failed check is a failed CHECK, not a failed deployment.
+ */
+export interface RuntimeCheck {
+  observedAt: string;
+  /** http_ok = the health endpoint answered as expected at `observedAt` · http_failed = it answered wrongly (non-2xx / marker mismatch) · unknown = no usable answer */
+  verdict: "http_ok" | "http_failed" | "unknown";
+  runtime: VerificationEvidence["runtime"];
+  currentReleaseMatches: boolean | null;
+  health: HealthObservation | null;
+  applets: AppletsObservation | null;
+}
+
 export interface LiveOperationRecord {
   id: string;
   kind: LiveKind;
@@ -181,6 +237,12 @@ export interface LiveOperationRecord {
   steps: StepRecord[];
   remote: { appConfirmed: boolean | null; sourceId: string | null; releaseId: string | null };
   ladder: VerificationLadder;
+  /** where the "runtime started" fact came from; absent on records written before provenance existed (never guessed afterwards) */
+  evidence?: VerificationEvidence;
+  /** latest FRESH read-only check of a DEPLOYED operation (separate from the historical `evidence`) */
+  latestCheck?: RuntimeCheck;
+  /** WHO is executing it: stamped when execution is claimed (optional ⇒ no migration). Start-up recovery uses it to leave an operation that another LIVE service instance is running alone. */
+  runner?: { instance: string; pid: number };
   failure: { code: string; step: StepName | "preflight" | "approval"; messageFa: string } | null;
   recoveryFa: string[];
   transitions: { at: string; from: LiveState | null; to: LiveState; note: string | null }[];

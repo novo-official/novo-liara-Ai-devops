@@ -298,8 +298,13 @@ export class DiagnosticRunManager {
       await this.transition(run, "GENERATING_REPORT");
       this.setStep(run, "prepare_report", "running");
       await this.persist(run);
-      const remaining = Math.max(500, Math.min(this.o.narrativeTimeoutMs, this.o.runTimeoutMs / 2));
-      const narrative = await buildNarrative(this.o.provider, llmContext({ app: run.app, intent: run.intent, analysis, simulated: mode === "mock" }), evidence.ids(), { timeoutMs: remaining, signal: a.ac.signal });
+      // a real model needs seconds, not the offline provider's milliseconds; the run's own timeout still bounds it
+      const remaining = this.o.provider.kind === "live" ? Math.max(3000, Math.min(20_000, this.o.runTimeoutMs - 8_000)) : Math.max(500, Math.min(this.o.narrativeTimeoutMs, this.o.runTimeoutMs / 2));
+      // a real model is only asked to analyse evidence that exists; with nothing usable collected the report says so and no model is called (nor paid for)
+      const usable = evidence.items.some((e) => e.availability === "available" || e.availability === "stale");
+      const narrative = this.o.provider.kind === "live" && !usable
+        ? { status: "no_evidence" as const, source: "none" as const, citedEvidenceIds: [], providerId: this.o.provider.id }
+        : await buildNarrative(this.o.provider, llmContext({ app: run.app, intent: run.intent, analysis, simulated: mode === "mock", evidence }), evidence.ids(), { timeoutMs: remaining, signal: a.ac.signal });
       if (await aborted()) return;
       await this.o.store.appendAudit(this.iso(), run.id, "narrative", { status: narrative.status, source: narrative.source });
       run.report = buildReport({ runId: run.id, app: run.app, intent: run.intent, evidence, analysis, narrative, now: this.o.now() });

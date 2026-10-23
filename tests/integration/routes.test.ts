@@ -225,6 +225,30 @@ describe("login / logout", () => {
     expect(blocked.headers.get("set-cookie")).toBeNull();
   });
 
+  describe("throttle key (documented behaviour: never weakened by client-controlled headers)", () => {
+    const from = (xff: string, pw: string) => loginRoute.POST(loginReq({ password: pw }, { "x-forwarded-for": xff }));
+    it("without a trusted proxy every client shares ONE bucket, so rotating X-Forwarded-For cannot buy extra attempts", async () => {
+      configure();
+      for (let i = 0; i < 5; i++) expect((await from(`198.51.100.${i + 1}`, `wrong-password-${i}x`)).status).toBe(401);
+      expect((await from("198.51.100.99", TEST_PASSWORD)).status).toBe(429);
+    });
+    it("with a trusted proxy the RIGHTMOST (proxy-appended) address is the key; a spoofed leftmost value is ignored; an unparsable one falls back to the shared bucket", async () => {
+      configure({ TRUST_PROXY_HEADERS: "true" });
+      for (let i = 0; i < 5; i++) expect((await from(`6.6.6.${i}, 203.0.113.7`, `wrong-password-${i}x`)).status).toBe(401);
+      expect((await from("1.1.1.1, 203.0.113.7", TEST_PASSWORD)).status, "same real client, new spoofed prefix").toBe(429);
+      expect((await from("1.1.1.1, 203.0.113.8", TEST_PASSWORD)).status, "a different real client is not locked out by it").toBe(200);
+      for (let i = 0; i < 5; i++) expect((await from("garbage;drop", `wrong-password-${i}y`)).status).toBe(401);
+      expect((await from("not an ip", TEST_PASSWORD)).status, "unparsable ⇒ shared bucket").toBe(429);
+    });
+    it("a global ceiling still applies across many distinct clients (distributed guessing is bounded too)", async () => {
+      configure({ TRUST_PROXY_HEADERS: "true" });
+      for (let i = 0; i < 20; i++) expect((await from(`203.0.113.${100 + Math.floor(i / 4)}`, `wrong-password-${i}z`)).status).toBe(401);
+      const r = await from("203.0.113.250", TEST_PASSWORD);
+      expect(r.status).toBe(429);
+      expect(r.headers.get("set-cookie")).toBeNull();
+    });
+  });
+
   it("enforces same-origin + JSON on state-changing auth routes", async () => {
     configure();
     const cases: Array<[string, Request]> = [

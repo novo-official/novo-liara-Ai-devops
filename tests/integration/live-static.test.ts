@@ -20,7 +20,8 @@ describe("Phase 2A static guarantees", () => {
     const hits = walk(path.join(SRC, "server")).filter((f) => /["'`]POST["'`]/.test(code(f))).map(rel).sort();
     expect(hits).toEqual(expect.arrayContaining(["server/live/write-client.ts"]));
     // the only other server files naming "POST" are own-origin guards, never Liara egress
-    for (const h of hits.filter((x) => x !== "server/live/write-client.ts")) expect(/^server\/(agent|security|auth)\//.test(h), h).toBe(true);
+    // …and the one model-egress file, which talks to the BoxAPI host only (enforced in zero-cost.test.ts: no Liara host, no import of the live/liara layers)
+    for (const h of hits.filter((x) => x !== "server/live/write-client.ts" && x !== "server/ai/boxapi.ts")) expect(/^server\/(agent|security|auth)\//.test(h), h).toBe(true);
   });
   it("no other live module can send a request: fetch/http/https/dns/net are confined to write-client.ts and probe.ts", () => {
     for (const f of live) {

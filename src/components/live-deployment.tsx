@@ -9,8 +9,10 @@ import { Countdown } from "@/components/countdown";
 import { liveUi as t } from "@/i18n/live-fa";
 import { faDateTime, faNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { LADDER_EVIDENCE, LADDER_KEYS, ladderVerdict } from "@/lib/live-ladder";
+import { LADDER_EVIDENCE, LADDER_KEYS, ladderVerdict, type Ladder } from "@/lib/live-ladder";
 import { artifactUsable } from "@/lib/artifact-binding";
+import { explainNewAppBlockers } from "@/lib/live-blockers";
+import { mergeResults, parseOperationResponse, type AppletsView, type HealthView, type LiveResultView } from "@/lib/live-result";
 import { nextAction, stages, type NextActionInput } from "@/lib/live-next-action";
 import { deployUi } from "@/i18n/deploy-fa";
 import type { ExistingBackendView, ExistingPreview, ExistingTargetView, LiveModeInfo, LiveStatus, LiveProposalView } from "@/server/live/service";
@@ -44,24 +46,41 @@ export type ReadinessSummary = { verdict: string; frameworkFa: string } | null;
 
 export type LiveSection = "existing" | "new";
 
-export function LiveDeploymentPanel({ runId, defaultApp, readiness = null, artifact = NO_ARTIFACT, section = "existing" }: { runId: string; defaultApp: string; readiness?: ReadinessSummary; artifact?: ArtifactBinding; section?: LiveSection }) {
+export function LiveDeploymentPanel({ runId, defaultApp, readiness = null, artifact = NO_ARTIFACT, section = "existing", confirmed, onResolved }: { runId: string; defaultApp: string; readiness?: ReadinessSummary; artifact?: ArtifactBinding; section?: LiveSection; confirmed?: LiveResultView[]; onResolved?: (r: LiveResultView) => void }) {
   const [status, setStatus] = useState<LiveStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // results CONFIRMED by an action in this browser: kept outside the status document so they survive a refresh that no longer lists the operation (and, when the
+  // parent passes them down, a tab switch that remounts this panel)
+  const [ownConfirmed, setOwnConfirmed] = useState<LiveResultView[]>([]);
+  const results = confirmed ?? ownConfirmed;
+  const resolved = useCallback(
+    (r: LiveResultView) => {
+      if (onResolved) onResolved(r);
+      else setOwnConfirmed((prev) => [r, ...prev.filter((x) => x.operationId !== r.operationId)]);
+    },
+    [onResolved],
+  );
+  const seq = useRef(0);
 
   const refresh = useCallback(async () => {
+    const mine = ++seq.current;
     const r = await api<LiveStatus>(`/api/agent/live/status?runId=${encodeURIComponent(runId)}`);
+    if (mine !== seq.current) return; // a newer request was started meanwhile: never let a slow, older answer overwrite a fresher one
     if (r.ok) {
       setStatus(r.data);
       setLoadError(null);
-    } else setLoadError(r.message);
+    } else setLoadError(r.message); // the previous status (and every confirmed result) stays on screen
   }, [runId]);
 
   useEffect(() => {
     let alive = true;
+    const mine = ++seq.current;
     void api<LiveStatus>(`/api/agent/live/status?runId=${encodeURIComponent(runId)}`).then((r) => {
-      if (!alive) return;
-      if (r.ok) setStatus(r.data);
-      else setLoadError(r.message);
+      if (!alive || mine !== seq.current) return; // unmounted, run changed, or a newer request was started meanwhile
+      if (r.ok) {
+        setStatus(r.data);
+        setLoadError(null);
+      } else setLoadError(r.message);
     });
     return () => {
       alive = false;
@@ -80,15 +99,16 @@ export function LiveDeploymentPanel({ runId, defaultApp, readiness = null, artif
       <section aria-labelledby="live-h" className="rounded-xl border p-4" data-testid="live-panel" data-state="loading">
         <h2 id="live-h" className="font-semibold">{t.title}</h2>
         {loadError ? <p role="alert" className="mt-2 text-sm text-destructive">{loadError}</p> : <Loader2 className="mt-2 size-4 animate-spin motion-reduce:animate-none" aria-label="…" />}
+        {results.length > 0 && <div className="mt-3 flex flex-col gap-3">{results.map((r) => <ResultCard key={r.operationId} r={r} source="action" />)}</div>}
       </section>
     );
   }
 
-  return <LiveDeploymentView status={status} runId={runId} defaultApp={defaultApp} readiness={readiness} artifact={artifact} section={section} onChanged={refresh} />;
+  return <LiveDeploymentView status={status} runId={runId} defaultApp={defaultApp} readiness={readiness} artifact={artifact} section={section} confirmed={results} onResolved={resolved} refreshError={loadError} onChanged={refresh} />;
 }
 
 /** Presentational half (also used by the unit tests): everything is derived from the server's status document. `section` picks ONE of the two live paths. */
-export function LiveDeploymentView({ status, runId, defaultApp, readiness = null, artifact = NO_ARTIFACT, section = "existing", onChanged: refresh }: { status: LiveStatus; runId: string; defaultApp: string; readiness?: ReadinessSummary; artifact?: ArtifactBinding; section?: LiveSection; onChanged: () => void }) {
+export function LiveDeploymentView({ status, runId, defaultApp, readiness = null, artifact = NO_ARTIFACT, section = "existing", confirmed = [], onResolved, refreshError = null, onChanged: refresh }: { status: LiveStatus; runId: string; defaultApp: string; readiness?: ReadinessSummary; artifact?: ArtifactBinding; section?: LiveSection; confirmed?: LiveResultView[]; onResolved?: (r: LiveResultView) => void; refreshError?: string | null; onChanged: () => void }) {
   const hardPrereqMissing = status.prerequisites.some((p) => p.blocking && !p.ok);
   const blockingRun = status.runBlockers.filter((b) => !b.startsWith("sensitive_files"));
   const canPropose = !hardPrereqMissing && blockingRun.length === 0 && (status.catalogue?.unitsVerified ?? false);
@@ -96,24 +116,31 @@ export function LiveDeploymentView({ status, runId, defaultApp, readiness = null
   const existingProposals = status.proposals.filter((v) => v.proposal.kind === "deploy_existing_app");
   const latest = createProposals.at(-1);
   const openProposal = createProposals.find((p) => p.proposal.status === "PENDING" || p.proposal.status === "APPROVED");
+  // The header describes the ACTIVE path. `status.uiState` aggregates the prerequisites of creating a NEW application (plan units, network…); a release to an
+  // EXISTING application has its own state (`status.existing.uiState`, built from `existingPrerequisites()` and the target's facts) and is used for that section.
+  // The existing-specific state is the source of truth there; `status.uiState` is only the fallback when it is genuinely absent. Nothing is converted to "ready".
+  const headerState = section === "existing" ? (status.existing?.uiState ?? status.uiState) : status.uiState;
+  const newAppBlockers = section === "new" && status.uiState === "BLOCKED" ? explainNewAppBlockers(status.prerequisites, status.runBlockers) : null;
 
   return (
-    <section aria-labelledby="live-h" className={cn("flex flex-col gap-4 rounded-xl border-2 p-4", MODE_FRAME[status.mode.kind])} data-testid="live-panel" data-state={status.uiState} data-live-mode={status.mode.kind} data-section={section}>
+    <section aria-labelledby="live-h" className={cn("flex flex-col gap-4 rounded-xl border-2 p-4", MODE_FRAME[status.mode.kind])} data-testid="live-panel" data-state={headerState} data-live-mode={status.mode.kind} data-section={section}>
       <div className="flex flex-wrap items-center gap-2">
         <Rocket className="size-4 text-destructive" aria-hidden />
         <h2 id="live-h" className="font-semibold">{t.title}</h2>
-        <Badge variant="outline" className={cn("ms-auto", STATE_STYLE[status.uiState])} data-testid="live-state-badge" data-state={status.uiState}>{t.states[status.uiState]}</Badge>
+        <Badge variant="outline" className={cn("ms-auto", STATE_STYLE[headerState])} data-testid="live-state-badge" data-state={headerState}>{t.states[headerState]}</Badge>
       </div>
       <ModeBanner mode={status.mode} />
       <p className="text-xs leading-6 text-muted-foreground" data-testid="live-subtitle">{t.subtitle}</p>
+      {refreshError && <p role="alert" className="rounded-lg border border-warning/50 bg-warning/5 p-2 text-xs leading-6" data-testid="live-refresh-error">{t.flow.result.refreshError}</p>}
 
       {section === "existing" ? (
-        <ExistingAppSection status={status} runId={runId} readiness={readiness} proposals={existingProposals} artifact={artifact} onChanged={refresh} />
+        <ExistingAppSection status={status} runId={runId} readiness={readiness} proposals={existingProposals} artifact={artifact} confirmed={confirmed} onResolved={onResolved} onChanged={refresh} />
       ) : (
         <section aria-labelledby="live-new-h" className="flex flex-col gap-4 rounded-xl border border-dashed p-3" data-testid="live-create-new">
           <h3 id="live-new-h" className="text-sm font-semibold">{t.existing.createNewTitle}</h3>
           <p className="text-xs leading-6 text-muted-foreground">{t.existing.createNewNote}</p>
           <p role="status" className="rounded-lg border p-2 text-sm leading-7" data-testid="live-state-help">{t.stateHelp[status.uiState]}</p>
+          {newAppBlockers && newAppBlockers.kind !== "none" && <p className="rounded-lg border border-warning/50 bg-warning/5 p-2 text-xs leading-6" data-testid="live-new-app-blocker-note" data-kind={newAppBlockers.kind}>{t.flow.newAppBlocked[newAppBlockers.kind]}</p>}
 
           {status.preflight && <PreflightSummary pf={status.preflight} proposal={openProposal?.proposal ?? null} />}
 
@@ -144,7 +171,7 @@ export function LiveDeploymentView({ status, runId, defaultApp, readiness = null
 
           {createProposals.map((v) => <LiveProposalCard key={v.proposal.id} view={v} artifact={artifact} onChanged={refresh} />)}
 
-          {latest?.operation && <OperationView op={latest.operation} onChanged={refresh} />}
+          {latest?.operation && <OperationView op={latest.operation} onResolved={onResolved} onChanged={refresh} />}
         </section>
       )}
     </section>
@@ -248,7 +275,7 @@ const previewKey = (a: ArtifactBinding, app: string, backend: string) => `${a.fi
  * readiness (A: source+target, read-only; B: execution prerequisites) → offline preview → approval request → timeline. Preview needs no live flag; a request,
  * an approval and an execution always do.
  */
-function ExistingAppSection({ status, runId, readiness, proposals, artifact, onChanged }: { status: LiveStatus; runId: string; readiness: ReadinessSummary; proposals: LiveProposalView[]; artifact: ArtifactBinding; onChanged: () => void }) {
+function ExistingAppSection({ status, runId, readiness, proposals, artifact, confirmed, onResolved, onChanged }: { status: LiveStatus; runId: string; readiness: ReadinessSummary; proposals: LiveProposalView[]; artifact: ArtifactBinding; confirmed: LiveResultView[]; onResolved?: (r: LiveResultView) => void; onChanged: () => void }) {
   const ex = status.existing;
   const x = t.existing;
   const fl = t.flow;
@@ -267,6 +294,12 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
   const latest = proposals.at(-1);
   const locks = status.locks ?? [];
   const lock = locks.find((l) => l.appName === target?.name) ?? null;
+  // results for the selected application: confirmed in this browser first, then the persisted history; once a NEWER operation of the same app exists in THIS run
+  // the older result is no longer "the latest" and is hidden. A result is never a lock.
+  const confirmedIds = new Set(confirmed.map((c) => c.operationId));
+  const newerInRun = (app: string, completedAt: string) => proposals.some((p) => p.proposal.appName === app && !!p.operation && p.operation.createdAt > completedAt);
+  const shownResults = mergeResults(confirmed, status.lastResults ?? [], newerInRun).filter((r) => r.appName === target?.name || confirmedIds.has(r.operationId));
+  const lastForTarget = shownResults.find((r) => r.appName === target?.name && (r.state === "DEPLOYED" || r.state === "FAILED")) ?? null;
   const readinessOk = readiness ? readiness.verdict === "READY" || readiness.verdict === "READY_WITH_WARNINGS" : true;
   const fileOk = artifactUsable(artifact.state);
   const key = previewKey(artifact, target?.name ?? "", backend);
@@ -291,6 +324,7 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
     opState: latest?.operation?.state ?? null,
     lockState: lock?.state ?? null,
     lockAccess: lock?.access,
+    lastResult: lastForTarget ? (lastForTarget.state as "DEPLOYED" | "FAILED") : null,
   };
   const na = nextAction(flow);
   const stageList = stages(flow);
@@ -352,6 +386,12 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
         {na.id === "run_preview" && <Button type="button" className="min-h-11 w-fit px-4" onClick={() => void runPreview()} disabled={!canPreview} data-testid="live-next-run-preview"><Eye aria-hidden />{fl.preview.button}</Button>}
       </div>
 
+      {shownResults.length > 0 && (
+        <div className="flex flex-col gap-3" data-testid="live-results">
+          {shownResults.map((r) => <ResultCard key={r.operationId} r={r} source={confirmedIds.has(r.operationId) ? "action" : "history"} onResolved={onResolved} />)}
+        </div>
+      )}
+
       {locks.length > 0 && (
         <section aria-labelledby="live-lock-h" className="flex flex-col gap-3 rounded-lg border-2 border-warning p-3" data-testid="live-locks">
           <h4 id="live-lock-h" className="text-sm font-semibold">{fl.lock.title}</h4>
@@ -360,7 +400,7 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
             <div key={l.operation?.id ?? `${l.appName}-${l.createdAt}`} className="flex flex-col gap-2" data-testid="live-lock" data-op-id={l.operation?.id ?? ""} data-app={l.appName} data-state={l.state} data-access={l.access}>
               {l.appName !== target?.name && <p className="text-xs text-muted-foreground">{fl.lock.otherApp}</p>}
               {l.access === "orphan" && <p className="rounded-lg border border-warning/50 bg-warning/5 p-2 text-xs leading-6" data-testid="live-lock-orphan-note">{fl.lock.orphan}</p>}
-              {l.operation ? <OperationView op={l.operation} orphan={l.access === "orphan"} onChanged={onChanged} /> : <p className="rounded-lg border p-2 text-sm leading-7" data-testid="live-lock-elsewhere">{fl.lock.elsewhere(l.appName, t.states_fa[l.state as keyof typeof t.states_fa] ?? l.state)}</p>}
+              {l.operation ? <OperationView op={l.operation} orphan={l.access === "orphan"} onResolved={onResolved} onChanged={onChanged} /> : <p className="rounded-lg border p-2 text-sm leading-7" data-testid="live-lock-elsewhere">{fl.lock.elsewhere(l.appName, t.states_fa[l.state as keyof typeof t.states_fa] ?? l.state)}</p>}
             </div>
           ))}
         </section>
@@ -498,7 +538,7 @@ function ExistingAppSection({ status, runId, readiness, proposals, artifact, onC
       {open && error && <p role="alert" className="text-sm text-destructive" data-testid="live-existing-error">{error}</p>}
 
       {proposals.map((v) => <LiveProposalCard key={v.proposal.id} view={v} artifact={artifact} onChanged={onChanged} />)}
-      {latest?.operation && <OperationView op={latest.operation} onChanged={onChanged} />}
+      {latest?.operation && <OperationView op={latest.operation} onResolved={onResolved} onChanged={onChanged} />}
     </section>
   );
 }
@@ -687,8 +727,8 @@ function LiveProposalCard({ view, artifact, onChanged }: { view: LiveProposalVie
           <dl className="grid min-w-0 gap-x-4 gap-y-3 text-sm sm:grid-cols-2 [&>div]:min-w-0" data-testid="live-bindings" data-kind={p.kind}>
             {existingKind && <Binding k={t.existing.bindings.kind} wide><span data-testid="live-bind-kind">{t.existing.bindings.kindValue}</span></Binding>}
             {existingKind && <Binding k={t.existing.bindings.backend}><bdi className="ltr-isolate font-mono" data-testid="live-bind-backend">{p.backend}</bdi> <Badge variant="outline">{p.backend === "api" ? t.existing.defaultBadge : t.existing.fallbackBadge}</Badge></Binding>}
-            <Binding k={t.proposal.operator}><bdi className="ltr-isolate font-mono">{p.ownerHash.slice(0, 8)}</bdi></Binding>
-            <Binding k={t.proposal.team}>{p.teamId ? <bdi className="ltr-isolate font-mono">{p.teamId}</bdi> : t.proposal.personalScope}</Binding>
+            {/* the API sends only the coarse scope: neither the operator hash nor the raw team id ever reaches the browser (see lib/live-public.ts) */}
+            <Binding k={t.proposal.team}>{(p as unknown as { teamScope?: "team" | "personal" }).teamScope === "team" ? t.proposal.teamScope : t.proposal.personalScope}</Binding>
             <Binding k={t.proposal.app}><bdi className="ltr-isolate font-mono" data-testid="live-bind-app">{p.appName}</bdi></Binding>
             <Binding k={t.proposal.plan}><bdi className="ltr-isolate font-mono">{p.planId}</bdi></Binding>
             {!existingKind && <Binding k={t.proposal.bundle}><bdi className="ltr-isolate font-mono">{p.bundlePlanId}</bdi></Binding>}
@@ -738,6 +778,189 @@ function LiveProposalCard({ view, artifact, onChanged }: { view: LiveProposalVie
   );
 }
 
+const dur = (ms: number | null) => (ms === null ? "" : ` · ${t.flow.result.health.duration}: ${faNumber(ms)} ${t.flow.result.health.ms}`);
+
+/** One HTTP health observation, as a FACT with its time: result, HTTP status, marker match, safe failure category, duration. */
+function HealthLine({ h }: { h: HealthView | null | undefined }) {
+  const hh = t.flow.result.health;
+  if (h === undefined) return <p className="text-muted-foreground" data-testid="live-health" data-kind="unrecorded">{hh.unrecorded}</p>;
+  if (h === null) return <p className="text-muted-foreground" data-testid="live-health" data-kind="not_probed">{hh.notProbed}</p>;
+  const verified = h.outcome === "ok" && (h.markerRequired ? h.markerMatched === true : h.markerMatched !== false);
+  const marker = h.markerMatched === true ? hh.marker.matched : h.markerMatched === false ? hh.marker.mismatch : hh.marker.notChecked;
+  return (
+    <p data-testid="live-health" data-kind={verified ? "ok" : "not_ok"} data-outcome={h.outcome} data-failure={h.failure ?? ""}>
+      <strong>{hh.title}:</strong> {verified ? hh.ok : hh.notOk}
+      {h.status !== null ? ` · ${hh.status} ${faNumber(h.status)}` : ""} · {marker}
+      {h.failure ? ` · ${hh.failure[h.failure] ?? h.failure}` : ""}
+      {dur(h.durationMs)} · {t.flow.result.observedAt}: {faDateTime(h.observedAt)}
+    </p>
+  );
+}
+
+/** The applets list is a SEPARATE source: unreadable means "no information", never "the app is down". */
+function AppletsLine({ a }: { a: AppletsView | null | undefined }) {
+  const ap = t.flow.result.applets;
+  if (!a) return <p className="text-muted-foreground" data-testid="live-applets" data-kind="unrecorded">{ap.title}: {ap.unrecorded}</p>;
+  return (
+    <p data-testid="live-applets" data-kind={a.readable ? "read" : "unreadable"}>
+      <strong>{ap.title}:</strong> {a.readable ? ap.read : ap.failed(a.failure)} · {t.flow.result.observedAt}: {faDateTime(a.observedAt)}
+    </p>
+  );
+}
+
+/** What the runtime evidence is, in plain words — never presents an inference as a direct observation, and never invents provenance for a legacy record. */
+export function EvidenceNote({ r }: { r: LiveResultView }) {
+  const ev = t.flow.result.evidence;
+  return (
+    <div className="rounded-lg border p-2 text-xs leading-6" data-testid="live-result-evidence" data-runtime-evidence={r.runtimeEvidence} data-applets-readable={String(r.appletsReadable)} data-evidence-kind="historical">
+      <p className="font-medium">{t.flow.result.historicalTitle}</p>
+      <p className="text-muted-foreground" data-testid="live-evidence-time">{r.evidenceObservedAt ? `${t.flow.result.observedAt}: ${faDateTime(r.evidenceObservedAt)}` : t.flow.result.timeUnrecorded}</p>
+      <p className="mt-1 text-muted-foreground">{ev[r.runtimeEvidence]}</p>
+      <div className="mt-1 flex flex-col gap-1 text-muted-foreground">
+        <HealthLine h={r.health} />
+        <AppletsLine a={r.applets} />
+      </div>
+      {r.appletsReadable === false && <p className="mt-1 text-muted-foreground" data-testid="live-result-applets-note">{t.flow.result.appletsFailed}</p>}
+    </div>
+  );
+}
+
+/** The FRESH read-only check (if any), visibly separate from the historical evidence and explicit that it never changes the deployment result. */
+function CheckNote({ r }: { r: LiveResultView }) {
+  const c = r.latestCheck;
+  const ck = t.flow.result.check;
+  if (!c) return <p className="rounded-lg border border-dashed p-2 text-xs leading-6 text-muted-foreground" data-testid="live-check" data-kind="none">{ck.none}</p>;
+  return (
+    <div className={cn("rounded-lg border-2 p-2 text-xs leading-6", c.verdict === "http_ok" ? "border-primary/50" : c.verdict === "http_failed" ? "border-destructive/50" : "border-warning/50")} data-testid="live-check" data-kind="fresh" data-verdict={c.verdict}>
+      <p className="font-medium">{ck.title}</p>
+      <p data-testid="live-check-time">{t.flow.result.observedAt}: {faDateTime(c.observedAt)}</p>
+      <p className="font-medium" data-testid="live-check-verdict">{ck.verdicts[c.verdict]}</p>
+      <div className="mt-1 flex flex-col gap-1">
+        <HealthLine h={c.health} />
+        <AppletsLine a={c.applets} />
+      </div>
+      {c.currentReleaseMatches === false && <p className="mt-1">{ck.notCurrent}</p>}
+      {c.currentReleaseMatches === null && <p className="mt-1">{ck.currentUnknown}</p>}
+      <p className="mt-1 text-muted-foreground">{ck.unchanged}</p>
+    </div>
+  );
+}
+
+/** Read-only fresh check of a finished deployment: one GET to the health endpoint and a few reads. It cannot change the deployment's state. */
+function RecheckButton({ r, onResolved }: { r: LiveResultView; onResolved: (v: LiveResultView) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function run() {
+    setBusy(true);
+    setError(null);
+    const x = await api<unknown>(`/api/agent/live/operations/${r.operationId}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "recheck", ...(r.access === "orphan" ? { adoptOrphan: true } : {}) }) });
+    setBusy(false);
+    if (!x.ok) return setError(x.message);
+    const parsed = parseOperationResponse(x.data, r.operationId);
+    if (!parsed) return setError(t.flow.result.uncertain);
+    onResolved({ ...parsed, access: r.access });
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <Button type="button" variant="outline" className="min-h-11 w-fit px-3" disabled={busy} onClick={() => void run()} data-testid="live-recheck">{busy ? t.flow.result.recheck.busy : t.flow.result.recheck.button}</Button>
+      <p className="text-xs leading-6 text-muted-foreground">{t.flow.result.recheck.hint}</p>
+      {error && <p role="alert" className="text-sm text-destructive" data-testid="live-recheck-error">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * The result of a live operation, shown independently of whether the operation still holds a lock. `action` = confirmed by the answer of an action in this browser;
+ * `history` = the latest persisted terminal result (a RECORD — visibly not a running operation). Success is claimed only for the validated state DEPLOYED.
+ */
+export function ResultCard({ r, source, onResolved }: { r: LiveResultView; source: "action" | "history"; onResolved?: (v: LiveResultView) => void }) {
+  const rr = t.flow.result;
+  const ok = r.state === "DEPLOYED";
+  const bad = r.state === "FAILED";
+  const deployedHeadline =
+    r.runtimeEvidence === "inferred"
+      ? (rr.headline.DEPLOYED_INFERRED ?? "مستقر؛ اجرای برنامه از پاسخ سلامت HTTP استنتاج شده است")
+      : r.runtimeEvidence === "unrecorded" || r.runtimeEvidence === "unknown"
+      ? (rr.headline.DEPLOYED_UNRECORDED ?? "مستقر؛ منشأ شاهد اجرای برنامه ثبت نشده است")
+      : (rr.headline.DEPLOYED_OBSERVED ?? rr.headline.DEPLOYED);
+  const headline = r.abandoned ? rr.abandoned : ok ? deployedHeadline : (rr.headline[r.state] ?? rr.headline.other)!;
+  return (
+    <section aria-labelledby={`res-h-${r.operationId}`} role={source === "action" ? "status" : undefined} className={cn("flex flex-col gap-3 rounded-xl border-2 p-3", ok ? "border-primary bg-primary/5" : bad ? "border-destructive/60" : "border-warning/60 bg-warning/5")} data-testid="live-result" data-state={r.state} data-source={source} data-op-id={r.operationId} data-app={r.appName}>
+      <div className="flex flex-wrap items-center gap-2">
+        {ok ? <CheckCircle2 className="size-5 text-primary" aria-hidden /> : bad ? <OctagonX className="size-5 text-destructive" aria-hidden /> : <TriangleAlert className="size-5 text-warning" aria-hidden />}
+        <h4 id={`res-h-${r.operationId}`} className="text-sm font-semibold">{source === "history" ? rr.historyTitle : rr.freshTitle}</h4>
+        {source === "history" && <Badge variant="outline" className="ms-auto" data-testid="live-result-record-badge">ثبت‌شده</Badge>}
+      </div>
+      <p className={cn("text-sm font-semibold leading-7", ok ? "text-primary" : bad ? "text-destructive" : "text-warning")} data-testid="live-result-headline">{headline}</p>
+      {source === "history" && <p className="text-xs leading-6 text-muted-foreground">{rr.historyNote}</p>}
+      <dl className="grid min-w-0 gap-x-4 gap-y-2 text-sm sm:grid-cols-2 [&>div]:min-w-0">
+        <Binding k={rr.app}><bdi className="ltr-isolate font-mono">{r.appName}</bdi></Binding>
+        <Binding k={rr.completedAt}>{r.completedAt ? faDateTime(r.completedAt) : "—"}</Binding>
+        <Binding k={rr.release} wide><bdi className="ltr-isolate break-all font-mono" data-testid="live-result-release">{r.releaseId ?? "—"}</bdi><span className="mt-1 block text-xs leading-6 text-muted-foreground" data-testid="live-result-release-hint">{rr.releaseHint}</span></Binding>
+      </dl>
+      <div className="mt-2">
+        <p className="text-xs font-semibold text-muted-foreground mb-2">{rr.ladder}</p>
+        <ul className="grid gap-1.5 text-xs" data-testid="live-result-ladder">
+          {LADDER_KEYS.map((k) => {
+            const val = r.ladder[k];
+            const isOk = val === "ok";
+            const isFailed = val === "failed";
+            return (
+              <li
+                key={k}
+                data-level={k}
+                data-value={val}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-xl px-3 py-2 border transition-colors",
+                  isOk
+                    ? "border-success/30 bg-success/5 text-foreground"
+                    : isFailed
+                    ? "border-destructive/30 bg-destructive/5 text-foreground"
+                    : "border-border/50 bg-muted/15 text-muted-foreground"
+                )}
+              >
+                {isOk ? (
+                  <CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
+                ) : isFailed ? (
+                  <OctagonX className="size-4 shrink-0 text-destructive" aria-hidden />
+                ) : (
+                  <CircleDashed className="size-4 shrink-0 text-muted-foreground/60" aria-hidden />
+                )}
+                <span className="font-medium text-xs">
+                  {t.ladderLabels[k] ?? k}
+                  {k === "runtimeStarted" && isOk && r.runtimeEvidence === "inferred" ? (
+                    <Badge variant="outline" className="ms-2 border-warning/60 bg-warning/10 text-warning text-[10px] px-1.5 py-0" data-testid="live-runtime-inferred">
+                      استنتاج‌شده
+                    </Badge>
+                  ) : null}
+                </span>
+                <span
+                  className={cn(
+                    "ms-auto text-[11px] font-semibold px-2 py-0.5 rounded-full border",
+                    isOk
+                      ? "border-success/30 bg-success/10 text-success"
+                      : isFailed
+                      ? "border-destructive/30 bg-destructive/10 text-destructive"
+                      : "border-border/60 bg-muted/30 text-muted-foreground"
+                  )}
+                >
+                  {t.levels[val]}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      {ok && <p className="rounded-lg border border-warning/40 bg-warning/5 p-2 text-xs leading-6" data-testid="live-result-deploy-note">{rr.deployNote}</p>}
+      {(ok || r.ladder.runtimeStarted !== "unknown" || r.runtimeEvidence !== "unknown") && <EvidenceNote r={r} />}
+      {ok && <CheckNote r={r} />}
+      {ok && onResolved && r.access !== undefined && <RecheckButton r={r} onResolved={onResolved} />}
+      {!ok && r.failureFa && !r.abandoned && <p className="rounded-lg border p-2 text-sm leading-7" data-testid="live-result-failure">{r.failureFa}</p>}
+      {!ok && r.recoveryFa.length > 0 && <ul className="list-disc space-y-1 ps-5 text-xs leading-6" data-testid="live-result-recovery">{r.recoveryFa.map((x) => <li key={x}>{x}</li>)}</ul>}
+    </section>
+  );
+}
+
 /** Second step of "abandon": says exactly what it does (local bookkeeping only) before anything changes. */
 export function AbandonConfirmBox({ opId, busy, disabled, onConfirm, onBack }: { opId: string; busy: boolean; disabled: boolean; onConfirm: () => void; onBack: () => void }) {
   return (
@@ -752,21 +975,39 @@ export function AbandonConfirmBox({ opId, busy, disabled, onConfirm, onBack }: {
   );
 }
 
-function OperationView({ op, orphan = false, onChanged }: { op: LiveOperationRecord; orphan?: boolean; onChanged: () => void }) {
+function ladderVerdictText(ladder: Ladder, runtime?: string | null): string {
+  const v = ladderVerdict(ladder);
+  if (v === "DEPLOYED") {
+    if (runtime === "inferred") return t.verification.verdict.DEPLOYED_INFERRED ?? t.verification.verdict.DEPLOYED ?? v;
+    if (runtime === "unrecorded" || runtime === "unknown" || !runtime) return t.verification.verdict.DEPLOYED_UNRECORDED ?? t.verification.verdict.DEPLOYED ?? v;
+    return t.verification.verdict.DEPLOYED_OBSERVED ?? t.verification.verdict.DEPLOYED ?? v;
+  }
+  return t.verification.verdict[v] ?? v;
+}
+
+export function OperationView({ op, orphan = false, onResolved, onChanged }: { op: LiveOperationRecord; orphan?: boolean; onResolved?: (r: LiveResultView) => void; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmAbandon, setConfirmAbandon] = useState(false);
   const existingKind = op.kind === "deploy_existing_app";
   const lbl = (st: keyof typeof t.states_fa) => (existingKind ? t.existing.stateLabels[st] : undefined) ?? t.states_fa[st];
   const review = op.state === "NEEDS_OPERATOR_REVIEW";
-  const cancellable = op.state === "AWAITING_LIVE_APPROVAL" || op.state === "APPROVED";
+  // APPROVED means execution has been CLAIMED (the proposal is consumed and the executor is already running): only AWAITING_LIVE_APPROVAL is a real "before anything happened" state. The server still decides (compare-and-set).
+  const cancellable = op.state === "AWAITING_LIVE_APPROVAL";
   async function act(action: "cancel" | "reverify" | "abandon") {
     setBusy(action);
     setError(null);
-    const r = await api(`/api/agent/live/operations/${op.id}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...(orphan ? { adoptOrphan: true } : {}) }) });
+    const r = await api<unknown>(`/api/agent/live/operations/${op.id}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...(orphan ? { adoptOrphan: true } : {}) }) });
     setBusy(null);
     setConfirmAbandon(false);
     if (!r.ok) setError(r.message);
+    else {
+      // an HTTP 200 proves nothing by itself: only the VALIDATED operation state is shown. The result is handed to the parent, which outlives this card (the card
+      // disappears as soon as the operation stops holding the lock — e.g. when it becomes DEPLOYED).
+      const result = parseOperationResponse(r.data, op.id);
+      if (result) onResolved?.({ ...result, access: orphan ? "orphan" : "owner" });
+      else setError(t.flow.result.uncertain);
+    }
     onChanged();
   }
   return (
@@ -787,16 +1028,63 @@ function OperationView({ op, orphan = false, onChanged }: { op: LiveOperationRec
         ))}
       </ol>
 
-      <p className="mt-3 text-sm" data-testid="live-ladder-verdict" data-verdict={ladderVerdict(op.ladder)}><strong>{t.verification.verdict[ladderVerdict(op.ladder)]}</strong></p>
-      <h4 className="mt-3 text-sm font-medium">{t.operation.ladder}</h4>
-      <ul className="mt-1 flex flex-col gap-1 text-xs" data-testid="live-ladder">
-        {Object.entries(op.ladder).map(([k, v]) => (
-          <li key={k} data-level={k} data-value={v} className="flex items-center gap-2">
-            {v === "ok" ? <CheckCircle2 className="size-3.5 shrink-0 text-primary" aria-hidden /> : v === "failed" ? <OctagonX className="size-3.5 shrink-0 text-destructive" aria-hidden /> : <CircleDashed className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />}
-            <span>{t.ladderLabels[k] ?? k}</span><span className="ms-auto text-muted-foreground">{t.levels[v]}</span>
-          </li>
-        ))}
-      </ul>
+      <div className="mt-4 pt-3 border-t border-border/40">
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="text-xs font-semibold text-muted-foreground">{t.operation.ladder}</h4>
+          <span className="text-xs font-bold" data-testid="live-ladder-verdict" data-verdict={ladderVerdict(op.ladder)}>
+            {ladderVerdictText(op.ladder, op.evidence?.runtime)}
+          </span>
+        </div>
+        <ul className="grid gap-1.5 text-xs" data-testid="live-ladder">
+          {Object.entries(op.ladder).map(([k, v]) => {
+            const isOk = v === "ok";
+            const isFailed = v === "failed";
+            return (
+              <li
+                key={k}
+                data-level={k}
+                data-value={v}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-xl px-3 py-2 border transition-colors",
+                  isOk
+                    ? "border-success/30 bg-success/5 text-foreground"
+                    : isFailed
+                    ? "border-destructive/30 bg-destructive/5 text-foreground"
+                    : "border-border/50 bg-muted/15 text-muted-foreground"
+                )}
+              >
+                {isOk ? (
+                  <CheckCircle2 className="size-4 shrink-0 text-success" aria-hidden />
+                ) : isFailed ? (
+                  <OctagonX className="size-4 shrink-0 text-destructive" aria-hidden />
+                ) : (
+                  <CircleDashed className="size-4 shrink-0 text-muted-foreground/60" aria-hidden />
+                )}
+                <span className="font-medium text-xs">
+                  {t.ladderLabels[k] ?? k}
+                  {k === "runtimeStarted" && isOk && op.evidence?.runtime === "inferred" ? (
+                    <Badge variant="outline" className="ms-2 border-warning/60 bg-warning/10 text-warning text-[10px] px-1.5 py-0" data-testid="live-runtime-inferred">
+                      استنتاج‌شده
+                    </Badge>
+                  ) : null}
+                </span>
+                <span
+                  className={cn(
+                    "ms-auto text-[11px] font-semibold px-2 py-0.5 rounded-full border",
+                    isOk
+                      ? "border-success/30 bg-success/10 text-success"
+                      : isFailed
+                      ? "border-destructive/30 bg-destructive/10 text-destructive"
+                      : "border-border/60 bg-muted/30 text-muted-foreground"
+                  )}
+                >
+                  {t.levels[v]}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
       <details className="mt-2 text-xs" data-testid="live-ladder-evidence">
         <summary className="cursor-pointer text-muted-foreground">{t.verification.evidence}</summary>
         <ul className="mt-1 flex flex-col gap-1.5">

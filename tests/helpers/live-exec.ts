@@ -103,6 +103,8 @@ export class FakeLiara {
   create: CreateBehavior = "ok";
   upload: UploadBehavior = "ok";
   release: ReleaseBehavior = "ok";
+  /** false ⇒ GET /applets answers an error (the real API answered HTTP 500) */
+  runtimeOk = true;
   probeResult: ProbeResult = { outcome: "ok", status: 200, markerFound: true };
   pollsSeen = 0;
   calls: { op: "createApp" | "uploadSource" | "createRelease"; app: string; body?: unknown; bytes?: number }[] = [];
@@ -177,7 +179,7 @@ export class FakeLiara {
     },
     getRuntime: async () => {
       this.pollsSeen++;
-      return good(this.runtime);
+      return this.runtimeOk ? good(this.runtime) : bad("upstream_error");
     },
     getRecentLogs: async () => good({ lines: ["ready"], count: 1 }),
     planCatalogue: async () => (this.catalogueOk ? good(this.catalogue) : bad("upstream_error")),
@@ -218,7 +220,7 @@ export interface Harness {
   rebuild: (over?: Partial<LiveServiceOptions>) => LiveDeploymentService;
 }
 
-export async function harness(o: { env?: Record<string, string | undefined>; store?: LiveStore; zip?: Buffer; noTransport?: boolean; fake?: FakeLiara; poll?: Partial<{ verifyBudgetMs: number; pollIntervalMs: number }>; probe?: LiveServiceOptions["probe"]; owner?: string; cli?: LiveServiceOptions["cliBackend"] } = {}): Promise<Harness> {
+export async function harness(o: { env?: Record<string, string | undefined>; store?: LiveStore; zip?: Buffer; noTransport?: boolean; fake?: FakeLiara; poll?: Partial<{ verifyBudgetMs: number; pollIntervalMs: number; reverifyBudgetMs: number }>; probe?: LiveServiceOptions["probe"]; owner?: string; cli?: LiveServiceOptions["cliBackend"] } = {}): Promise<Harness> {
   const fake = o.fake ?? new FakeLiara();
   const store = o.store ?? new MemoryLiveStore();
   let t = NOW;

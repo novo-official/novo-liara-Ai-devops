@@ -54,17 +54,24 @@ export default async function AppDetailPage({ params, searchParams }: Props) {
           <RefreshButton />
         </div>
         <nav aria-label={fa.detail.window} className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="text-sm text-muted-foreground">{fa.detail.window}:</span>
-          {WINDOWS_MINUTES.map((w) => (
-            <Link
-              key={w}
-              href={`${base}?window=${w}`}
-              aria-current={w === win ? "true" : undefined}
-              className={cn("inline-flex min-h-11 items-center rounded-lg border px-3 text-sm", w === win ? "border-primary bg-primary/15 text-primary" : "hover:bg-muted")}
-            >
-              {fa.detail.windows[String(w)]}
-            </Link>
-          ))}
+          <span className="text-xs font-semibold text-muted-foreground me-1">{fa.detail.window}:</span>
+          <div className="inline-flex items-center gap-1 rounded-xl bg-card/60 p-1 border border-border/60 backdrop-blur-md shadow-inner">
+            {WINDOWS_MINUTES.map((w) => (
+              <Link
+                key={w}
+                href={`${base}?window=${w}`}
+                aria-current={w === win ? "true" : undefined}
+                className={cn(
+                  "inline-flex min-h-8 items-center rounded-lg px-3 py-1 text-xs font-semibold transition-all duration-200",
+                  w === win
+                    ? "bg-primary/15 text-primary border border-primary/25 shadow-xs"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                )}
+              >
+                {fa.detail.windows[String(w)]}
+              </Link>
+            ))}
+          </div>
         </nav>
       </div>
 
@@ -197,6 +204,7 @@ async function Releases({ name }: { name: string }) {
             {r.currentRelease && (
               <p className="text-xs text-muted-foreground">
                 {fa.detail.currentRelease}: <bdi className="ltr-isolate">{r.currentRelease}</bdi>
+                <span className="mt-1 block" data-testid="release-hint">{fa.detail.releaseHint}</span>
               </p>
             )}
             <ul className="flex flex-col gap-2">

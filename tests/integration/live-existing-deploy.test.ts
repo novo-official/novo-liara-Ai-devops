@@ -35,6 +35,60 @@ async function deployExisting(h: H, backend: "api" | "cli") {
 }
 const ops = (f: FakeLiara) => f.calls.map((c) => c.op);
 
+describe("existing application: release READY and current, health endpoint reachable — the second real incident (probe network error + applets HTTP 500)", () => {
+  async function incident() {
+    let probeMode: "network" | "ok" = "network";
+    const h = await harness({ poll: { verifyBudgetMs: 60_000, pollIntervalMs: 1000, reverifyBudgetMs: 3000 }, probe: async () => (probeMode === "network" ? { outcome: "network", status: null, markerFound: null } : { outcome: "ok", status: 200, markerFound: true }) });
+    h.fake.apps.add(APP);
+    h.fake.releaseIds.push("rel_old_1");
+    h.fake.releaseStates = ["READY"];
+    h.fake.runtimeOk = false; // GET /applets → HTTP 500 (the real API)
+    const { final } = await (async () => {
+      const v = await h.svc.createExistingProposal(OWNER, { runId: h.runId, appName: APP, backend: "api", zip: h.zip });
+      await h.svc.decide(v.proposal.id, OWNER, { decision: "approve", digest: v.proposal.digest, confirmAppName: APP });
+      return { final: await settle(h, (await h.svc.execute(v.proposal.id, OWNER, h.zip)).id) };
+    })();
+    return { h, final, setProbe: (m: "network" | "ok") => (probeMode = m) };
+  }
+  it("exactly what was recorded: build ok, runtime unknown, health unknown ⇒ NEEDS_OPERATOR_REVIEW (partially verified) while the lock stays", async () => {
+    const { h, final } = await incident();
+    expect(final.state).toBe("NEEDS_OPERATOR_REVIEW");
+    expect(final.failure).toMatchObject({ code: "partially_verified", step: "verify_deployment" });
+    expect(final.ladder).toMatchObject({ releaseCreated: "ok", buildCompleted: "ok", runtimeStarted: "unknown", httpHealthVerified: "unknown" });
+    expect(await h.svc.createExistingProposal(OWNER, { runId: h.runId, appName: APP, backend: "api", zip: h.zip }).then(() => "created", (e) => (isLiveError(e) ? e.code : "other"))).toBe("live_operation_in_progress");
+  });
+  it("after the probe works, RE-VERIFY (read-only, no write) ends DEPLOYED — build, runtime (inferred from the marker-verified answer) and health all ok — and the lock is released", async () => {
+    const { h, final, setProbe } = await incident();
+    const writes = [...h.fake.calls];
+    setProbe("ok");
+    const again = await h.svc.resolve(final.id, OWNER, "reverify");
+    expect(again.state).toBe("DEPLOYED");
+    expect(again.failure).toBeNull();
+    expect(again.ladder).toEqual({ apiAcceptedRequest: "ok", sourceUploaded: "ok", releaseCreated: "ok", buildCompleted: "ok", runtimeStarted: "ok", httpHealthVerified: "ok" });
+    expect(h.fake.calls).toEqual(writes); // re-verification sent nothing
+    expect((await h.store.getOperation(final.id))?.state).toBe("DEPLOYED");
+    // the slot is free again: a NEW proposal can be made (a later release), the finished one is not touched
+    const next = await h.svc.createExistingProposal(OWNER, { runId: h.runId, appName: APP, backend: "api", zip: h.zip });
+    expect(next.proposal.status).toBe("PENDING");
+  });
+  it("re-verify does NOT wait the 10-minute post-release budget: a still-failing probe ends the click within the short re-verify budget", async () => {
+    const { h, final } = await incident();
+    h.sleeps.length = 0;
+    const again = await h.svc.resolve(final.id, OWNER, "reverify");
+    expect(again.state).toBe("NEEDS_OPERATOR_REVIEW"); // still unknown: never promoted without evidence
+    expect(h.sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(4000); // reverifyBudgetMs = 3 s (not verifyBudgetMs = 60 s here, 10 min in production)
+  });
+  it("an applet list that is READABLE and says stopped is never overridden by a healthy-looking answer", async () => {
+    const { h, final, setProbe } = await incident();
+    h.fake.runtimeOk = true;
+    h.fake.runtime = { runtime: "stopped", appletCount: 1, heuristic: true, enabled: "enabled" };
+    setProbe("ok");
+    const again = await h.svc.resolve(final.id, OWNER, "reverify");
+    expect(again.state).toBe("FAILED");
+    expect(again.ladder.runtimeStarted).toBe("failed");
+  });
+});
+
 describe("existing application: a 2xx upload answer whose sourceID cannot be read (the first real attempt)", () => {
   it("ends in review with the evidence kept; nothing is retried, no release is attempted, the app stays untouched, and the old release is still the baseline", async () => {
     const { h } = await setup("api");

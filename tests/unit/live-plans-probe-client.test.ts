@@ -3,7 +3,7 @@ import { Secret } from "@/server/security/secret";
 import { classifyStatus, CreateAppRequestSchema, CreateReleaseRequestSchema } from "@/server/live/contract";
 import { financialFor, listCandidates, selectPlan } from "@/server/live/plans";
 import { buildProbeHost, isBlockedAddress, safeProbe, type RequestFn } from "@/server/live/probe";
-import { classifyReleaseState, evaluateLadder, verdictOf, type Snapshot } from "@/server/live/verify";
+import { assess, classifyReleaseState, evaluateLadder, verdictOf, type Snapshot } from "@/server/live/verify";
 import { LiaraWriteClient } from "@/server/live/write-client";
 import { parsePlanUnits } from "@/server/live/units";
 import { CANARY } from "../helpers/canaries";
@@ -152,7 +152,12 @@ describe("verification ladder: unknown is never success", () => {
     expect(v({ releaseState: null })).toBe("needs_review");
     expect(v({ releaseState: "SOMETHING_NEW" })).toBe("needs_review");
     expect(v({ releaseState: "SOMETHING_NEW" }, true)).toBe("pending");
-    expect(v({ runtime: null })).toBe("needs_review");
+    expect(v({ runtime: null, health: null })).toBe("needs_review");
+    expect(v({ runtime: null, currentReleaseMatches: false })).toBe("needs_review"); // an older release could be the one answering
+    expect(v({ runtime: null, currentReleaseMatches: null })).toBe("needs_review");
+    expect(v({ runtime: null, health: { outcome: "ok", status: 200, markerFound: true, markerRequired: false } })).toBe("needs_review"); // no specific marker ⇒ a 200 proves nothing about OUR process
+    expect(v({ runtime: null, health: { outcome: "timeout", status: null, markerFound: null, markerRequired: true } })).toBe("needs_review");
+    expect(v({ runtime: null, releaseState: "DEPLOYING" }, true)).toBe("pending");
     expect(v({ runtime: { runtime: "unknown", heuristic: true, appletCount: 1 } })).toBe("needs_review");
     expect(v({ runtime: { runtime: "running", heuristic: true, appletCount: 0 } })).toBe("needs_review");
     expect(v({ health: null, probeConfigured: false })).toBe("needs_review");
@@ -177,6 +182,36 @@ describe("verification ladder: unknown is never success", () => {
     expect(v({ releaseState: "DEPLOYING", runtime: { runtime: "restarting", heuristic: true, appletCount: 1 }, health: null }, true)).toBe("pending");
     expect(classifyReleaseState("ready")).toBe("ready");
     expect(classifyReleaseState(null)).toBe("unknown");
+  });
+  it("applets endpoint unreadable (the real API answered HTTP 500): the runtime is inferred ONLY from a marker-verified answer of the CURRENT, READY release — never over a readable stopped/restarting/unknown applet list", () => {
+    const real: Snapshot = { ...base, runtime: null, currentReleaseMatches: true, health: { outcome: "ok", status: 200, markerFound: true, markerRequired: true } };
+    expect(evaluateLadder(real)).toEqual({ apiAcceptedRequest: "ok", sourceUploaded: "ok", releaseCreated: "ok", buildCompleted: "ok", runtimeStarted: "ok", httpHealthVerified: "ok" });
+    expect(verdictOf(evaluateLadder(real), { stillPolling: false })).toBe("deployed");
+    expect(evaluateLadder({ ...real, runtime: { runtime: "unknown", heuristic: true, appletCount: 1 } }).runtimeStarted).toBe("unknown");
+    expect(evaluateLadder({ ...real, runtime: { runtime: "stopped", heuristic: true, appletCount: 1 } }).runtimeStarted).toBe("failed");
+    expect(evaluateLadder({ ...real, releaseState: "UNHEALTHY" }).runtimeStarted).toBe("failed");
+  });
+  it("provenance of the runtime fact: observed (applets read) / inferred (applets unreadable + marker-verified answer) / unknown — and the ladder is identical to evaluateLadder", () => {
+    const observed = assess(base);
+    expect(observed.evidence).toEqual({ runtime: "observed", appletsReadable: true });
+    const inferred = assess({ ...base, runtime: null });
+    expect(inferred.evidence).toEqual({ runtime: "inferred", appletsReadable: false });
+    expect(inferred.ladder.runtimeStarted).toBe("ok");
+    const unknownUnreadable = assess({ ...base, runtime: null, health: { outcome: "network", status: null, markerFound: null, markerRequired: true } });
+    expect(unknownUnreadable.evidence).toEqual({ runtime: "unknown", appletsReadable: false });
+    expect(unknownUnreadable.ladder.runtimeStarted).toBe("unknown");
+    expect(assess({ ...base, runtime: { runtime: "unknown", heuristic: true, appletCount: 1 } }).evidence).toEqual({ runtime: "unknown", appletsReadable: true });
+    expect(assess({ ...base, runtime: { runtime: "stopped", heuristic: true, appletCount: 1 } }).evidence.runtime).toBe("observed"); // a readable "stopped" is an observation (of a failure)
+    for (const s of [base, { ...base, runtime: null }, { ...base, releaseState: "DEPLOYING", health: null }]) expect(assess(s).ladder).toEqual(evaluateLadder(s));
+  });
+  it("provenance details: a snapshot with an observation time records source/outcome/status/marker/category/duration; 'no probe ran' is NULL; without a time nothing is fabricated", () => {
+    const at = "2026-10-23T08:12:12.000Z";
+    const probed = assess({ ...base, runtime: null, observedAt: at, applets: { readable: false, failure: "upstream_error" }, health: { outcome: "ok", status: 200, markerFound: true, markerRequired: true, failure: null, durationMs: 41 } });
+    expect(probed.evidence).toEqual({ runtime: "inferred", appletsReadable: false, observedAt: at, health: { source: "http_probe", observedAt: at, outcome: "ok", status: 200, markerRequired: true, markerMatched: true, failure: null, durationMs: 41 }, applets: { observedAt: at, readable: false, runtimeClass: null, appletCount: null, failure: "upstream_error" } });
+    expect(assess({ ...base, observedAt: at, health: null }).evidence.health).toBeNull(); // no probe ran in that observation
+    const legacy = assess(base).evidence; // no observation time supplied ⇒ no timestamp, no health, no applets detail is invented
+    expect(legacy).toEqual({ runtime: "observed", appletsReadable: true });
+    expect(assess({ ...base, observedAt: at, runtime: { runtime: "running", heuristic: true, appletCount: 2 } }).evidence.applets).toEqual({ observedAt: at, readable: true, runtimeClass: "running", appletCount: 2, failure: null });
   });
   it("build completed does not imply runtime started, and runtime started does not imply health", () => {
     const l = evaluateLadder({ ...base, releaseState: "DEPLOYING", runtime: null, health: null });

@@ -6,10 +6,7 @@
 import { SqliteLiveStore } from "../../src/server/live/store";
 import { harness, OWNER } from "../helpers/live-exec";
 
-async function main() {
-  const dbPath = process.env.DIAGNOSTICS_DB_PATH;
-  if (!dbPath) throw new Error("DIAGNOSTICS_DB_PATH is required");
-  const APP = "demo-worker"; // one of the mock targets, but not the first one, so the other specs' default target is unaffected
+async function seed(dbPath: string, APP: string) {
   const h = await harness({ store: new SqliteLiveStore(dbPath), env: { LIARA_TEAM_ID: undefined }, owner: OWNER });
   h.fake.apps.add(APP);
   h.fake.scope.add(APP);
@@ -27,5 +24,14 @@ async function main() {
     await new Promise((r) => setTimeout(r, 5));
   }
   throw new Error("seed did not reach NEEDS_OPERATOR_REVIEW");
+}
+
+async function main() {
+  const dbPath = process.env.DIAGNOSTICS_DB_PATH;
+  if (!dbPath) throw new Error("DIAGNOSTICS_DB_PATH is required");
+  // `demo-worker`: recovered for real by zz-lock-recovery.spec.ts · `demo-api`: left untouched; zz-result-persistence.spec.ts only STUBS the network answers for it
+  // (one of the mock targets, but not the first one, so the other specs' default target is unaffected)
+  await seed(dbPath, "demo-worker");
+  await seed(dbPath, "demo-api");
 }
 main().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });

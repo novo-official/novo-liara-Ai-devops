@@ -1,5 +1,6 @@
 import "server-only";
 import { APP_NAME_REGEX, getConfig, type AppConfig } from "../config/env";
+import { configFingerprint } from "../config/fingerprint";
 import type {
   AppDetail,
   AppSummary,
@@ -368,16 +369,18 @@ export function buildService(cfg: AppConfig, deps: { fetchImpl?: typeof fetch; n
   return new LiaraService(new LiaraReadClient(http, opts), cfg, deps.now);
 }
 
-const g = globalThis as unknown as { __liaraService?: LiaraService };
+const g = globalThis as unknown as { __liaraService?: { svc: LiaraService; fp: string } };
 let testService: LiaraService | undefined;
 export function getService(): LiaraService {
   if (testService) return testService;
-  if (g.__liaraService) return g.__liaraService;
   const cfg = getConfig();
+  const fp = configFingerprint(cfg);
+  if (g.__liaraService?.fp === fp) return g.__liaraService.svc; // rebuilt when the configuration (data source, allowlist, token…) changed
   const svc = buildService(cfg);
   // Live mode only: apps created by a VERIFIED, approved live deployment join the operator's scope (exact team + name). The allowlist itself is never disabled.
   if (cfg.dataSource === "live") svc.setScopeExtension(bootstrappedScopeLookup(cfg.diagnostics.dbPath, cfg.liara.teamId));
-  return (g.__liaraService = svc);
+  g.__liaraService = { svc, fp };
+  return svc;
 }
 export function __setServiceForTests(s: LiaraService | undefined): void {
   testService = s;

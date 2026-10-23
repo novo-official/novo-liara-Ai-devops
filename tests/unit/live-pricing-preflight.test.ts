@@ -202,6 +202,8 @@ describe("preflight report", () => {
     expect(blockedIds(buildPreflight(green({}, { tokenPresent: false })))).toContain("token_present");
     expect(blockedIds(buildPreflight(green({}, { appDomainSuffixes: [] })))).toContain("app_domain_suffix");
     expect(blockedIds(buildPreflight(green({}, { healthMarker: null })))).toContain("health_marker");
+    for (const m of ["ok", "healthy", "true", "status", "1234567", "{}"]) expect(blockedIds(buildPreflight(green({}, { healthMarker: m }))), m).toContain("health_marker");
+    expect(blockedIds(buildPreflight(green({}, { healthMarker: "liara-agent-demo" })))).not.toContain("health_marker");
     expect(blockedIds(buildPreflight(green({ catalogue: null })))).toContain("catalogue_readable");
     expect(blockedIds(buildPreflight(green({ runBlockers: ["readiness_blocked"] })))).toContain("project_ready");
     expect(blockedIds(buildPreflight(green({ runBlockers: ["sensitive_files_in_archive_will_be_excluded"] })))).not.toContain("project_ready");

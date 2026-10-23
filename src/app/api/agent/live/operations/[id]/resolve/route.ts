@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { apiError, apiJson, guardedAction } from "@/server/security/guard";
+import { toPublicLive } from "@/lib/live-public";
 import { getLiveService } from "@/server/live/runtime";
 
 export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
-const Body = z.object({ action: z.enum(["cancel", "reverify", "abandon"]), /** explicit acknowledgement that the operation belongs to a login session that no longer exists */ adoptOrphan: z.boolean().optional() }).strict();
+const Body = z.object({ action: z.enum(["cancel", "reverify", "abandon", "recheck"]), /** explicit acknowledgement that the operation belongs to a login session that no longer exists */ adoptOrphan: z.boolean().optional() }).strict();
 
-/** The recovery workflow: cancel (only before anything remote), re-verify (read-only) or abandon (remote resources are KEPT; nothing is deleted). */
+/** The recovery workflow: cancel (only before anything remote), re-verify (read-only), recheck (a fresh READ-ONLY runtime check of a finished deployment; never changes its state) or abandon (remote resources are KEPT; nothing is deleted). */
 export async function POST(req: Request, { params }: Ctx) {
   const { id } = await params;
   return guardedAction(req, async ({ session, body }) => {
@@ -14,6 +15,6 @@ export async function POST(req: Request, { params }: Ctx) {
     const parsed = Body.safeParse(body);
     if (!parsed.success) return apiError("bad_request");
     const svc = getLiveService();
-    return apiJson(parsed.data.action === "cancel" ? await svc.cancel(id, session.id, parsed.data.adoptOrphan === true) : await svc.resolve(id, session.id, parsed.data.action, parsed.data.adoptOrphan === true));
+    return apiJson(toPublicLive(parsed.data.action === "cancel" ? await svc.cancel(id, session.id, parsed.data.adoptOrphan === true) : await svc.resolve(id, session.id, parsed.data.action, parsed.data.adoptOrphan === true)));
   });
 }

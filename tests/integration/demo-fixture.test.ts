@@ -76,8 +76,8 @@ describe("demo fixture: minimal, deterministic, safe to deploy later (never depl
   it("its REAL /health body is accepted by the existing SSRF-safe probe with the configured marker, and rejected without it", async () => {
     const body = Buffer.from(JSON.stringify({ status: "ok", app: "liara-agent-demo", version: "1" }));
     const ok = { resolve: async () => ["93.184.216.34"], request: async () => ({ status: 200, body, tooLarge: false }) };
-    expect(await safeProbe({ appName: "liara-agent-demo", suffixes: ["liara.run"], path: "/health", marker: "liara-agent-demo", ...ok })).toEqual({ outcome: "ok", status: 200, markerFound: true });
-    expect(await safeProbe({ appName: "liara-agent-demo", suffixes: ["liara.run"], path: "/health", marker: "some-other-app", ...ok })).toEqual({ outcome: "ok", status: 200, markerFound: false });
+    expect(await safeProbe({ appName: "liara-agent-demo", suffixes: ["liara.run"], path: "/health", marker: "liara-agent-demo", ...ok })).toMatchObject({ outcome: "ok", status: 200, markerFound: true });
+    expect(await safeProbe({ appName: "liara-agent-demo", suffixes: ["liara.run"], path: "/health", marker: "some-other-app", ...ok })).toMatchObject({ outcome: "ok", status: 200, markerFound: false });
     expect(body.length).toBeLessThan(4096); // within the probe's inspected window
   });
   it("when dist-demo/liara-agent-demo.zip exists it is the CURRENT fixture (a stale ZIP would be uploaded without public/)", () => {

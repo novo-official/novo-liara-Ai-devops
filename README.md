@@ -24,8 +24,8 @@ Sign in with the password you chose. Mock mode serves **simulated, sanitized** f
 | `npm run dev` / `npm run build && npm start` | Run the app |
 | `npm run typecheck` | `tsc --noEmit` (strict) |
 | `npm run lint` | ESLint, including custom rules: only `src/server/config` may read `process.env`; no physical-direction Tailwind classes (RTL) |
-| `npm test` | Vitest unit + integration tests (1047) |
-| `npm run test:e2e` | Playwright (111 tests) against a production build in mock mode, using the system Chrome |
+| `npm test` | Vitest unit + integration tests (1877 at the final hardening pass) |
+| `npm run test:e2e` | Playwright (150 tests) against a production build in mock mode, using the system Chrome |
 | `npm run verify:liara-readonly` | **Operator-only**, GET-only, budgeted live contract verification (dry run unless approved; see below) |
 | `npm run check` | typecheck + lint + unit/integration tests |
 | `npm run hash-password` | Generate the operator password hash |

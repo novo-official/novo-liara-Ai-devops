@@ -5,8 +5,8 @@ import type { ResponseShape } from "./response-shape";
 import type { LiveReader } from "./reader";
 import type { LiveStore } from "./store";
 import { ladderVerdict } from "@/lib/live-ladder";
-import { EMPTY_LADDER, LiveError, type LiveOperationRecord, type LiveProposal, type LiveState, type StepName, type StepRecord } from "./types";
-import { evaluateLadder, verdictOf, type Snapshot } from "./verify";
+import { EMPTY_LADDER, LiveError, type LiveOperationRecord, type LiveProposal, type LiveState, type RuntimeCheck, type StepName, type StepRecord } from "./types";
+import { assess, verdictOf, type Snapshot } from "./verify";
 import type { ProbeResult } from "./probe";
 import type { LiaraCliBackend } from "./cli/backend";
 
@@ -32,13 +32,15 @@ export interface ExecutorConfig {
   healthMarker: string | null;
   /** total wall-clock budget for the verification polling */
   verifyBudgetMs: number;
+  /** re-verification of a release that has existed for a while: a short bounded look, not the 10-minute post-release wait (the HTTP request of the operator's click must not hang) */
+  reverifyBudgetMs?: number;
   pollIntervalMs: number;
   reconcileAttempts: number;
   reconcileDelayMs: number;
   /** an operation older than this must not continue on its own */
   maxOperationAgeMs: number;
 }
-export const DEFAULT_EXECUTOR_CONFIG: Omit<ExecutorConfig, "suffixes"> = { healthPath: "/health", healthMarker: null, verifyBudgetMs: 10 * 60_000, pollIntervalMs: 5_000, reconcileAttempts: 4, reconcileDelayMs: 2_000, maxOperationAgeMs: 45 * 60_000 };
+export const DEFAULT_EXECUTOR_CONFIG: Omit<ExecutorConfig, "suffixes"> = { healthPath: "/health", healthMarker: null, verifyBudgetMs: 10 * 60_000, reverifyBudgetMs: 30_000, pollIntervalMs: 5_000, reconcileAttempts: 4, reconcileDelayMs: 2_000, maxOperationAgeMs: 45 * 60_000 };
 
 export interface ExecutorDeps {
   /** null ⇒ no REST write capability exists (a CLI-only configuration, or live execution disabled) */
@@ -54,7 +56,7 @@ export interface ExecutorDeps {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   audit: (runId: string | null, event: string, data: Record<string, unknown>) => Promise<void>;
-  probe: (o: { appName: string; path: string; marker?: string }) => Promise<ProbeResult>;
+  probe: (o: { appName: string; path: string; marker?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProbeResult>;
   /** re-derives the approved state fingerprint right now (plan availability, name absence, artifact, team); a mismatch blocks the run */
   fingerprint: (p: LiveProposal) => Promise<string | null>;
 }
@@ -354,16 +356,21 @@ export class LiaraDeploymentExecutor {
   }
 
   /** READ-ONLY. One observation of everything the ladder needs. */
-  async inspectDeployment(op: LiveOperationRecord): Promise<Snapshot> {
+  async inspectDeployment(op: LiveOperationRecord, opts: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<Snapshot> {
     const app = op.appName;
+    const observedAt = this.iso();
     const rel = await this.d.reader.getReleases(app);
     const entry = rel.ok && op.remote.releaseId ? rel.data.releases.find((x) => x.id === op.remote.releaseId) : undefined;
     const rt = await this.d.reader.getRuntime(app);
     let health: Snapshot["health"] = null;
     const probeConfigured = this.d.config.suffixes.length > 0;
-    if (probeConfigured && entry && ["READY", "DEPLOYING"].includes((entry.state ?? "").toUpperCase())) {
-      const pr = await this.d.probe({ appName: app, path: this.d.config.healthPath, marker: this.d.config.healthMarker ?? undefined });
-      health = { outcome: pr.outcome, status: pr.status, markerFound: pr.markerFound, markerRequired: this.d.config.healthMarker !== null };
+    const probeDue = probeConfigured && !!entry && ["READY", "DEPLOYING"].includes((entry.state ?? "").toUpperCase());
+    if (probeDue && opts.signal?.aborted) {
+      // the run's deadline guard already fired: record that the probe was CANCELLED (not "no probe ran") and do not start another
+      health = { outcome: "cancelled", status: null, markerFound: null, markerRequired: this.d.config.healthMarker !== null, failure: "cancelled", durationMs: 0 };
+    } else if (probeDue) {
+      const pr = await this.d.probe({ appName: app, path: this.d.config.healthPath, marker: this.d.config.healthMarker ?? undefined, timeoutMs: opts.timeoutMs, signal: opts.signal });
+      health = { outcome: pr.outcome, status: pr.status, markerFound: pr.markerFound, markerRequired: this.d.config.healthMarker !== null, failure: pr.failure ?? null, durationMs: pr.durationMs ?? null };
     }
     return {
       apiAcceptedRequest: op.ladder.apiAcceptedRequest === "ok",
@@ -374,6 +381,8 @@ export class LiaraDeploymentExecutor {
       runtime: rt.ok ? { runtime: rt.data.runtime, heuristic: rt.data.heuristic, appletCount: rt.data.appletCount } : null,
       health,
       probeConfigured,
+      observedAt,
+      applets: { readable: rt.ok, failure: rt.ok ? null : rt.code },
     };
   }
 
@@ -381,18 +390,22 @@ export class LiaraDeploymentExecutor {
    * Bounded polling → ladder → DEPLOYED / FAILED / NEEDS_OPERATOR_REVIEW. Read-only; safe to repeat. Also the engine of "re-verify": started from
    * NEEDS_OPERATOR_REVIEW it never moves back into the pipeline, it can only end in DEPLOYED (all six facts "ok"), FAILED, or stay under review.
    */
-  async verifyRuntime(op: LiveOperationRecord, from: LiveState = "RELEASE_CREATED"): Promise<LiveOperationRecord> {
+  async verifyRuntime(op: LiveOperationRecord, from: LiveState = "RELEASE_CREATED", budgetMs: number = this.d.config.verifyBudgetMs): Promise<LiveOperationRecord> {
     let cur = op;
     if (cur.state !== "VERIFYING_DEPLOYMENT" && cur.state !== "NEEDS_OPERATOR_REVIEW") {
       cur = this.withStep(this.patch(cur, { state: "VERIFYING_DEPLOYMENT" }), "verify_deployment", { status: "started", startedAt: this.iso() });
       cur = await this.persist(cur, from, "verification_started");
     }
     if (!cur.remote.releaseId) throw new LiveError("live_invalid_state", ["no_release"]);
-    const deadline = this.d.now() + this.d.config.verifyBudgetMs;
+    const deadline = this.d.now() + budgetMs;
+    // the WHOLE verification is bounded: every probe gets at most the remaining budget (≥1 s, ≤ 8 s) and one abort signal ends any probe still running at the deadline
+    const ac = new AbortController();
+    const guard = setTimeout(() => ac.abort(), budgetMs + 2_000);
+    try {
     for (;;) {
-      const snap = await this.inspectDeployment(cur);
-      const ladder = evaluateLadder(snap);
-      cur = await this.persist(this.patch(cur, { ladder }), cur.state);
+      const snap = await this.inspectDeployment(cur, { signal: ac.signal, timeoutMs: Math.min(8_000, Math.max(1_000, deadline - this.d.now())) });
+      const { ladder, evidence } = assess(snap);
+      cur = await this.persist(this.patch(cur, { ladder, evidence }), cur.state);
       const expired = this.d.now() >= deadline;
       const verdict = verdictOf(ladder, { stillPolling: !expired });
       if (verdict === "deployed") {
@@ -406,12 +419,29 @@ export class LiaraDeploymentExecutor {
       if (verdict === "needs_review") return this.needsReview(cur, cur.state, "verify_deployment", ladderVerdict(ladder) === "PARTIALLY_VERIFIED" ? "partially_verified" : "verification_inconclusive", ["شواهد کافی برای موفقیت نیست (وضعیت نسخه/اجرا یا سلامت HTTP نامعلوم است). نشانی برنامه را دستی بررسی کنید و بعد «بررسی دوبارهٔ وضعیت» را بزنید.", this.d.config.suffixes.length === 0 ? "دامنهٔ پیش‌فرض برای بررسی HTTP پیکربندی نشده است (LIARA_APP_DOMAIN_SUFFIXES)." : "بررسی سلامت HTTP موفق نبود."]);
       await this.d.sleep(this.d.config.pollIntervalMs);
     }
+    } finally {
+      clearTimeout(guard);
+    }
   }
 
-  /** Operator-requested re-check of an operation under review. READ-ONLY: with a release → full verification; without one → only refresh whether the app exists. */
+  private inFlight2 = new Map<string, Promise<LiveOperationRecord>>();
+  /** one run per (kind, operation) at a time: a second request while one is running gets THE SAME answer instead of starting a duplicate probe */
+  private coalesce(key: string, fn: () => Promise<LiveOperationRecord>): Promise<LiveOperationRecord> {
+    const running = this.inFlight2.get(key);
+    if (running) return running;
+    const p = fn().finally(() => this.inFlight2.delete(key));
+    this.inFlight2.set(key, p);
+    return p;
+  }
+
+  /** Operator-requested re-check of an operation under review. READ-ONLY: with a release → full verification (short, bounded budget); without one → only refresh whether the app exists. */
   async reverify(op: LiveOperationRecord): Promise<LiveOperationRecord> {
     if (op.state !== "NEEDS_OPERATOR_REVIEW") throw new LiveError("live_invalid_state", [op.state]);
-    if (op.remote.releaseId) return this.verifyRuntime(op, "NEEDS_OPERATOR_REVIEW");
+    return this.coalesce(`reverify:${op.id}`, () => this.reverifyOnce(op));
+  }
+
+  private async reverifyOnce(op: LiveOperationRecord): Promise<LiveOperationRecord> {
+    if (op.remote.releaseId) return this.verifyRuntime(op, "NEEDS_OPERATOR_REVIEW", Math.min(this.d.config.verifyBudgetMs, this.d.config.reverifyBudgetMs ?? 30_000));
     const exists = await this.nameExists(op.appName);
     if (exists === true && op.remote.appConfirmed !== true) {
       const id = await this.d.reader.appIdentity(op.appName);
@@ -422,6 +452,32 @@ export class LiaraDeploymentExecutor {
       return upd;
     }
     return op;
+  }
+
+  /**
+   * A FRESH, READ-ONLY runtime check of a finished (DEPLOYED) operation: one bounded observation (releases, applets, one HTTP probe). The result is stored NEXT TO the
+   * deployment record as `latestCheck`; state, ladder, historical `evidence`, transitions and `updatedAt` are never touched, so a failed check can never turn a
+   * completed deployment into a failed one, and an old success can never be mistaken for the new observation (it keeps its own `observedAt`).
+   */
+  async recheck(op: LiveOperationRecord): Promise<LiveOperationRecord> {
+    if (op.state !== "DEPLOYED" || !op.remote.releaseId) throw new LiveError("live_invalid_state", [op.state]);
+    return this.coalesce(`recheck:${op.id}`, async () => {
+      const ac = new AbortController();
+      const guard = setTimeout(() => ac.abort(), 12_000);
+      try {
+        const snap = await this.inspectDeployment(op, { signal: ac.signal, timeoutMs: 8_000 });
+        const { ladder, evidence } = assess(snap);
+        const health = evidence.health ?? null;
+        const verdict: RuntimeCheck["verdict"] = !health ? "unknown" : ladder.httpHealthVerified === "ok" ? "http_ok" : ladder.httpHealthVerified === "failed" ? "http_failed" : "unknown";
+        const check: RuntimeCheck = { observedAt: evidence.observedAt ?? this.iso(), verdict, runtime: evidence.runtime, currentReleaseMatches: snap.currentReleaseMatches, health, applets: evidence.applets ?? null };
+        const next: LiveOperationRecord = { ...op, latestCheck: check };
+        if (!(await this.d.store.updateOperation(next, "DEPLOYED"))) throw new LiveError("live_invalid_state", ["raced"]);
+        await this.d.audit(null, "operation_recheck", { operationId: op.id, verdict, httpStatus: health?.status ?? null, outcome: health?.outcome ?? null, failure: health?.failure ?? null, appletsReadable: evidence.applets?.readable ?? null });
+        return next;
+      } finally {
+        clearTimeout(guard);
+      }
+    });
   }
 
   /** Whole run for an APPROVED operation. One run per operation per process; across processes the store's compare-and-set arbitrates. */

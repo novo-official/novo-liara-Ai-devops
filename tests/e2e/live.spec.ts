@@ -88,6 +88,25 @@ test.describe("Phase 2A — live deployment panel in the default (disabled / moc
     expect(livePosts).toEqual([]);
   });
 
+  test("the header follows the active path: existing ⇒ its own state (same as the section badge, no new-app blocker note); new ⇒ the new-app aggregate «مسدود» with an accurate note", async ({ page }) => {
+    await uploaded(page);
+    const header = page.getByTestId("live-state-badge");
+    const sectionState = await page.getByTestId("live-existing-state").getAttribute("data-state");
+    await expect(header).toHaveAttribute("data-state", sectionState!); // label and data-state come from the same value
+    await expect(page.getByTestId("live-panel")).toHaveAttribute("data-state", sectionState!);
+    await expect(page.getByTestId("live-new-app-blocker-note")).toHaveCount(0);
+    await page.getByTestId("path-tab-new").click();
+    await expect(page.getByTestId("live-panel")).toHaveAttribute("data-section", "new");
+    await expect(header).toHaveAttribute("data-state", "BLOCKED");
+    await expect(header).toContainText("مسدود");
+    // mock mode lacks MORE than the new-app-only prerequisites (live flag, data source …), so the accurate "mixed" explanation is shown, never the blanket sentence
+    await expect(page.getByTestId("live-new-app-blocker-note")).toHaveAttribute("data-kind", "mixed");
+    await expect(page.getByTestId("live-new-app-blocker-note")).not.toContainText("این محدودیت مربوط به ساخت برنامهٔ جدید است.");
+    await page.getByTestId("path-tab-existing").click();
+    await expect(page.getByTestId("live-new-app-blocker-note")).toHaveCount(0);
+    expect(livePosts).toEqual([]);
+  });
+
   test("the server refuses a hand-made live proposal / execution (fails closed, HTTP 403) and a simulation id on live routes", async ({ page }) => {
     await uploaded(page);
     const res = await page.evaluate(async () => {
@@ -128,7 +147,7 @@ test.describe("Phase 2A — live deployment panel in the default (disabled / moc
       await page.setViewportSize({ width: w, height: h });
       await uploaded(page);
       const panel = page.getByTestId("live-panel");
-      await expect(panel).toHaveAttribute("data-state", "BLOCKED");
+      await expect(panel).toHaveAttribute("data-state", "SIMULATED"); // the EXISTING path's own state (mock data), not the new-app aggregate
       await panel.scrollIntoViewIfNeeded();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow).toBeLessThanOrEqual(0);

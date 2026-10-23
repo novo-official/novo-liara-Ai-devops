@@ -25,6 +25,8 @@ export interface NextActionInput {
   lockState: string | null;
   /** who may act on it from this session: the owner / a session after the owner's login is gone / nobody (owner still logged in elsewhere) */
   lockAccess?: "owner" | "orphan" | "other_session";
+  /** the latest TERMINAL result for the selected application (this run's confirmation or persisted history); never a lock */
+  lastResult?: "DEPLOYED" | "FAILED" | null;
 }
 
 export type NextActionId =
@@ -35,6 +37,7 @@ export type NextActionId =
   | "approve_pending"
   | "resolve_previous"
   | "locked_elsewhere"
+  | "deployed_previously"
   | "fix_source"
   | "choose_zip"
   | "wait_hash"
@@ -63,6 +66,8 @@ export function nextAction(i: NextActionInput): NextAction {
   if (i.proposal === "PENDING") return a("approve_pending", "action");
   if (i.lockState) return i.lockAccess === "other_session" ? a("locked_elsewhere", "blocked") : IN_FLIGHT.includes(i.lockState) ? a("wait_in_progress", "wait") : a("resolve_previous", "blocked");
   if (!i.readinessOk || i.runBlockers.length) return a("fix_source", "blocked");
+  // a finished, verified deployment must not send the operator back to "run the offline preview" as if it never happened; a new deployment is still one explicit step away
+  if (i.lastResult === "DEPLOYED" && i.preview === "none") return a("deployed_previously", "done");
   if (i.artifact === "none") return a("choose_zip", "action");
   if (i.artifact === "hashing") return a("wait_hash", "wait");
   if (i.artifact === "mismatch") return a("fix_zip", "blocked");

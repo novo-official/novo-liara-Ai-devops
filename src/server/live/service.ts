@@ -23,6 +23,7 @@ import { safeProbe, type ProbeResult } from "./probe";
 import type { LiveReader } from "./reader";
 import type { LiveStore } from "./store";
 import { isActiveOperation, teamKey } from "./store";
+import { toResultView, type LiveResultView } from "../../lib/live-result";
 import { EMPTY_LADDER, LiveError, LIVE_STATES, LIVE_TERMINAL, type LiveApprovalRecord, type LiveOperationRecord, type LiveProposal, type LiveProposalContent, type LiveState } from "./types";
 
 /**
@@ -53,13 +54,29 @@ export interface LiveServiceOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   executor?: Partial<ExecutorConfig>;
-  probe?: (o: { appName: string; path: string; marker?: string }) => Promise<ProbeResult>;
+  probe?: (o: { appName: string; path: string; marker?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<ProbeResult>;
   /**
    * Is a login session that maps to this owner hash still alive? Ownership is bound to the (in-memory) login session, so after a restart or a new login the
    * previous owner can never act again. When it is NOT active, another authenticated session may CLOSE (never approve or execute) that owner's operation —
    * see `recoveryAccess`. Absent ⇒ every owner is treated as active ⇒ strict owner-only (the safe default for tests and tooling).
    */
   isOwnerActive?: (ownerHash: string) => boolean;
+  /** identity of THIS service instance (stamped on the operations it executes); default: random */
+  instanceId?: string;
+  /** pid of this process (test seam); default `process.pid` */
+  pid?: number;
+  /** is a process with this pid alive on this host? (test seam; default: `process.kill(pid, 0)`) */
+  isPidAlive?: (pid: number) => boolean;
+}
+
+/** `process.kill(pid, 0)` sends no signal: it only tells whether the process exists (EPERM = exists, owned by someone else). */
+function defaultPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as { code?: string })?.code === "EPERM";
+  }
 }
 
 export interface LiveProposalView {
@@ -87,9 +104,13 @@ export class LiveDeploymentService {
   private lock: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private readonly recovered: Promise<void>;
+  private readonly instanceId: string;
+  private readonly pid: number;
 
   constructor(private readonly o: LiveServiceOptions) {
     this.now = o.now ?? Date.now;
+    this.instanceId = o.instanceId ?? randomBytes(6).toString("hex");
+    this.pid = o.pid ?? process.pid;
     this.executor = o.transport || o.cliBackend
       ? new LiaraDeploymentExecutor({
           transport: o.transport,
@@ -155,7 +176,7 @@ export class LiveDeploymentService {
     const prerequisites = this.prerequisites();
     const g0 = this.gate();
     const mode: LiveModeInfo = { kind: this.o.cfg.dataSource !== "live" ? "simulation" : g0.enabled ? "live_enabled" : "live_disabled", dataSource: this.o.cfg.dataSource, liveFlag: this.o.cfg.live.enabled, writePathReady: g0.enabled };
-    const out: LiveStatus = { uiState: "BLOCKED", prerequisites, runBlockers: [], catalogue: null, minRamMb: null, proposals: [], preflight: null, mode, existing: null, locks: [] };
+    const out: LiveStatus = { uiState: "BLOCKED", prerequisites, runBlockers: [], catalogue: null, minRamMb: null, proposals: [], preflight: null, mode, existing: null, locks: [], lastResults: [] };
     if (!runId) return out;
     const run = await this.ownedRun(runId, sessionId);
     const d = run.deployment!;
@@ -170,7 +191,9 @@ export class LiveDeploymentService {
       ? { source: this.o.cfg.dataSource === "live" ? "live" : "simulated", unitsVerified: this.o.cfg.live.planUnits !== null, candidates: listCandidates(cat.data, this.o.cfg.live.planUnits, rec.resources.ramMbMin), notes: ["سازگاری پلن با پلتفرم در API مشخص نیست.", ...(this.o.cfg.live.planUnits ? [] : ["واحدها تأیید نشده؛ بدون تأیید اپراتور، نه هزینه نمایش داده می‌شود و نه ساخت مجاز است."])] }
       : { source: "unavailable", unitsVerified: false, candidates: [], notes: ["فهرست پلن‌ها خوانده نشد."] };
     out.proposals = await this.listForRun(runId, sessionId);
+    await this.expireDueAwaiting(); // lifecycle maintenance: an expired, never-executed proposal must not show up as a lock (idempotent; writes only when something is due)
     out.locks = await this.lockingOperations(sessionId, runId);
+    out.lastResults = await this.latestTerminalResults(sessionId);
     const open = out.proposals.find((v) => v.proposal.status === "PENDING" || v.proposal.status === "APPROVED")?.proposal ?? null;
     const flying = out.proposals.some((v) => v.operation && IN_FLIGHT.includes(v.operation.state));
     if (!flying) out.preflight = await this.cachedPreflight(runId, open ? { planId: open.planId, bundlePlanId: open.bundlePlanId, appName: open.appName, minRamMb: rec.resources.ramMbMin } : null, out.runBlockers, cat.ok ? cat.data : null);
@@ -211,6 +234,31 @@ export class LiveDeploymentService {
     if (op.ownerHash === ownerHashOf(sessionId)) return "owner";
     if (teamKey(op.teamId) !== teamKey(this.o.cfg.liara.teamId)) return "other_session"; // never across teams
     return this.o.isOwnerActive && !this.o.isOwnerActive(op.ownerHash) ? "orphan" : "other_session";
+  }
+
+  /**
+   * The latest TERMINAL result (DEPLOYED or FAILED) per application, so a finished deployment stays discoverable from any later run or after a reload. READ-ONLY:
+   * it only reads persisted records — no verification, no polling, no request to Liara. Scope: this team, an application inside the operator's scope, and only
+   * records this session may see (its own, or those of a login that no longer exists — the same rule as `recoveryAccess`; another live session's records are never
+   * exposed). The latest is chosen among ALL owners first, so an inaccessible newer record can never make an older one look current. A historical result is
+   * never an active lock (`isActiveOperation` is false for both states of an existing-app release).
+   */
+  private async latestTerminalResults(sessionId: string): Promise<LiveResultView[]> {
+    const ops = await this.o.store.listOperationsInStates(["DEPLOYED", "FAILED"]);
+    const latest = new Map<string, LiveOperationRecord>();
+    for (const op of ops) {
+      if (teamKey(op.teamId) !== teamKey(this.o.cfg.liara.teamId) || !this.o.reader.inScope(op.appName)) continue;
+      const cur = latest.get(op.appName);
+      if (!cur || op.createdAt > cur.createdAt) latest.set(op.appName, op);
+    }
+    const out: LiveResultView[] = [];
+    for (const op of latest.values()) {
+      const access = this.recoveryAccess(op, sessionId);
+      if (access === "other_session") continue;
+      const v = toResultView(op);
+      if (v) out.push({ ...v, access });
+    }
+    return out.sort((a, b) => b.completedAt.localeCompare(a.completedAt)).slice(0, 6);
   }
 
   /**
@@ -392,6 +440,7 @@ export class LiveDeploymentService {
           { at: content.createdAt, from: "PREFLIGHT", to: "AWAITING_LIVE_APPROVAL", note: null },
         ],
       };
+      await this.expireDueAwaiting({ teamId: g.teamId, appName }); // an expired, never-executed proposal must not keep the slot
       const r = await this.o.store.createLiveProposal(proposal, op);
       if (!r.created) throw new LiveError(r.reason === "pending_exists" ? "live_proposal_pending" : "live_duplicate_app");
       await this.audit(run.id, "proposal_created", { proposalId: id, operationId, app: appName, plan: content.planId, team: g.teamId ? "team" : "personal", digest12: proposal.digest.slice(0, 12), expiresAt: proposal.expiresAt, actor: shortHash(sessionId) });
@@ -417,15 +466,33 @@ export class LiveDeploymentService {
     return Promise.all(ps.map((p) => this.view(p.id)));
   }
 
-  /** Lazy expiry, exactly once; the operation is cancelled with it so the (team, app) slot is released. */
+  /**
+   * THE expiry lifecycle step (one function, used by every entry point: reads, proposal creation, status, recovery). A proposal past its deadline that was never
+   * executed — PENDING (nobody decided) or APPROVED (decided, never executed) — becomes EXPIRED, and its still-awaiting operation moves through the legal
+   * AWAITING_LIVE_APPROVAL → CANCELLED transition, which also releases the (team, app) slot. Exactly once: the proposal compare-and-set decides; a proposal whose
+   * execution already started is CONSUMED and is never touched, and a repeated call finds EXPIRED and does nothing (no second transition, no second audit row).
+   */
   async expireIfDue(proposalId: string): Promise<boolean> {
     const p = await this.o.store.getLiveProposal(proposalId);
-    if (!p || p.status !== "PENDING" || p.expiresAt > this.iso()) return false;
+    if (!p || (p.status !== "PENDING" && p.status !== "APPROVED") || p.expiresAt > this.iso()) return false;
     const t = await this.o.store.transitionLiveProposal(proposalId, "EXPIRED", this.iso());
     if (!t.changed) return false;
     await this.cancelOperationOf(p, "approval_expired");
-    await this.audit(p.runId, "proposal_expired", { proposalId });
+    await this.audit(p.runId, "proposal_expired", { proposalId, from: p.status });
     return true;
+  }
+
+  /**
+   * Applies `expireIfDue` to the operations that are still waiting for a decision/execution — for one (team, app) slot, or for all of them. Bounded by the number of
+   * awaiting operations; no timers, no polling: it runs when the slot is asked for, when status is read and at start-up.
+   */
+  private async expireDueAwaiting(slot?: { teamId: string | null; appName: string }): Promise<number> {
+    let n = 0;
+    for (const op of await this.o.store.listOperationsInStates(["AWAITING_LIVE_APPROVAL"])) {
+      if (slot && (op.appName !== slot.appName || teamKey(op.teamId) !== teamKey(slot.teamId))) continue;
+      if (await this.expireIfDue(op.proposalId)) n++;
+    }
+    return n;
   }
   private async cancelOperationOf(p: LiveProposal, note: string) {
     const op = await this.o.store.getOperation(p.operationId);
@@ -633,6 +700,7 @@ export class LiveDeploymentService {
           { at: content.createdAt, from: "PREFLIGHT", to: "AWAITING_LIVE_APPROVAL", note: null },
         ],
       };
+      await this.expireDueAwaiting({ teamId: g.teamId, appName }); // an expired, never-executed proposal must not keep the slot
       const r = await this.o.store.createLiveProposal(proposal, op);
       if (!r.created) throw new LiveError(r.reason === "pending_exists" ? "live_proposal_pending" : "live_operation_in_progress");
       await this.audit(run.id, "proposal_created", { proposalId: id, operationId, kind: content.kind, backend: content.backend, app: appName, team: g.teamId ? "team" : "personal", digest12: proposal.digest.slice(0, 12), expiresAt: proposal.expiresAt, actor: shortHash(sessionId), cliVersion: cli?.version ?? null, argvDigest12: cli?.argvDigest.slice(0, 12) ?? null, manifestDigest12: cli?.manifestDigest.slice(0, 12) ?? null });
@@ -758,6 +826,7 @@ export class LiveDeploymentService {
     if (!this.executor) throw new LiveError("live_execution_disabled");
     const p = await this.o.store.getLiveProposal(proposalId);
     if (!p || p.ownerHash !== ownerHashOf(sessionId)) throw new LiveError("live_not_found");
+    if (p.status === "EXPIRED") throw new LiveError("live_expired"); // approved but not executed in time (already finalised by the expiry lifecycle)
     if (p.status !== "APPROVED") throw new LiveError("live_not_approved");
     if (!digestsEqual(liveDigest(contentOfLive(p)), p.digest)) throw new LiveError("live_tampered");
     const g = this.gate();
@@ -773,11 +842,11 @@ export class LiveDeploymentService {
     const cur = await this.o.store.getOperation(p.operationId);
     if (!cur) throw new LiveError("live_not_found");
     const nowIso = this.iso();
-    const approvedOp: LiveOperationRecord = { ...cur, state: "APPROVED", updatedAt: nowIso, transitions: [...cur.transitions, { at: nowIso, from: "AWAITING_LIVE_APPROVAL", to: "APPROVED", note: "execution_claimed" }] };
+    const approvedOp: LiveOperationRecord = { ...cur, state: "APPROVED", runner: { instance: this.instanceId, pid: this.pid }, updatedAt: nowIso, transitions: [...cur.transitions, { at: nowIso, from: "AWAITING_LIVE_APPROVAL", to: "APPROVED", note: "execution_claimed" }] };
     const r = await this.o.store.beginExecution(approvedOp, nowIso); // atomic: proposal APPROVED→CONSUMED + operation →APPROVED
     if (!r.started) {
       if (r.reason === "expired") {
-        await this.o.store.updateOperation({ ...cur, state: "CANCELLED", updatedAt: nowIso, transitions: [...cur.transitions, { at: nowIso, from: "AWAITING_LIVE_APPROVAL", to: "CANCELLED", note: "approval_expired_before_execution" }] }, "AWAITING_LIVE_APPROVAL");
+        await this.expireIfDue(p.id); // the shared lifecycle step: proposal EXPIRED + operation CANCELLED, consistently and once
         throw new LiveError("live_expired");
       }
       throw new LiveError(r.reason === "operation_not_awaiting" ? "live_operation_in_progress" : "live_not_approved");
@@ -834,9 +903,15 @@ export class LiveDeploymentService {
   }
 
   /** The explicit recovery workflow for NEEDS_OPERATOR_REVIEW: re-verify (read-only) or abandon (the remote resources are KEPT; nothing is deleted). */
-  async resolve(opId: string, sessionId: string, action: "reverify" | "abandon", adoptOrphan = false): Promise<LiveOperationRecord> {
+  async resolve(opId: string, sessionId: string, action: "reverify" | "abandon" | "recheck", adoptOrphan = false): Promise<LiveOperationRecord> {
     await this.recovered;
     const op = await this.operationForRecovery(opId, sessionId, adoptOrphan, action);
+    if (action === "recheck") {
+      // a FRESH read-only observation of a FINISHED deployment; never a state change (see `LiaraDeploymentExecutor.recheck`)
+      if (op.state !== "DEPLOYED") throw new LiveError("live_invalid_state", [op.state]);
+      if (!this.executor) throw new LiveError("live_execution_disabled");
+      return this.executor.recheck(op);
+    }
     if (op.state !== "NEEDS_OPERATOR_REVIEW") throw new LiveError("live_invalid_state", [op.state]);
     if (action === "reverify") {
       if (!this.executor) throw new LiveError("live_execution_disabled");
@@ -851,11 +926,28 @@ export class LiveDeploymentService {
     return next;
   }
 
+  /**
+   * Is this in-flight operation being executed by ANOTHER live service instance (another process on this host, or another service object in this process) sharing the
+   * store? `executor.isRunning` only knows THIS instance's runs, so without this check a second instance would mark a genuinely active operation as interrupted.
+   * Conservative: a record without a runner stamp (older / never claimed here), our own instance (its executor says it is not running), a dead pid, or an operation
+   * older than the maximum operation age (a pid may have been reused) is NOT considered running elsewhere. Supported topology: processes on ONE host sharing the file
+   * (a SQLite file is not a multi-host store); the liveness test is an OS fact, not process-local memory.
+   */
+  private runningElsewhere(op: LiveOperationRecord): boolean {
+    const r = op.runner;
+    if (!r || r.instance === this.instanceId) return false;
+    const maxAge = this.o.executor?.maxOperationAgeMs ?? DEFAULT_EXECUTOR_CONFIG.maxOperationAgeMs;
+    if (this.now() - Date.parse(op.createdAt) > maxAge) return false;
+    if (r.pid === this.pid) return true; // another service object in THIS (alive) process
+    return (this.o.isPidAlive ?? defaultPidAlive)(r.pid);
+  }
+
   /** Startup sweep. In-flight state is process-local, so anything mid-flight now is orphaned: it goes UNDER REVIEW (never retried); dead approvals are cancelled. */
   private async recover(): Promise<void> {
     try {
       const inflight = await this.o.store.listOperationsInStates(["APPROVED", "CREATING_APPLICATION", "UPLOADING_SOURCE", "CREATING_RELEASE", "VERIFYING_DEPLOYMENT", "SOURCE_UPLOADED", "RELEASE_CREATED", "APPLICATION_CREATED"]);
-      for (const op of inflight) if (!this.executor?.isRunning(op.id)) await this.markReview(op.id, "interrupted_by_restart");
+      for (const op of inflight) if (!this.executor?.isRunning(op.id) && !this.runningElsewhere(op)) await this.markReview(op.id, "interrupted_by_restart");
+      await this.expireDueAwaiting(); // approvals whose deadline passed while the process was down (PENDING or APPROVED, never executed)
       for (const op of await this.o.store.listOperationsInStates(["AWAITING_LIVE_APPROVAL"])) {
         const p = await this.o.store.getLiveProposal(op.proposalId);
         if (!p || !["PENDING", "APPROVED"].includes(p.status)) await this.cancelOperationOf(p ?? ({ operationId: op.id } as LiveProposal), "orphaned_awaiting_approval");
@@ -939,6 +1031,8 @@ export interface LiveStatus {
   existing: ExistingStatus | null;
   /** operations from other runs that still hold a (team, app) slot — the operator can resolve them from any run */
   locks: LockView[];
+  /** latest DEPLOYED/FAILED result per application (read-only history; never a lock) */
+  lastResults: LiveResultView[];
 }
 
 const IN_FLIGHT: readonly LiveState[] = ["APPROVED", "CREATING_APPLICATION", "APPLICATION_CREATED", "UPLOADING_SOURCE", "SOURCE_UPLOADED", "CREATING_RELEASE", "RELEASE_CREATED", "VERIFYING_DEPLOYMENT"];

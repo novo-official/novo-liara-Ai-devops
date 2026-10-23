@@ -6,7 +6,7 @@ import { ownerHashOf } from "@/server/diagnostics/store";
 import { assertNoCanary } from "../helpers/canaries";
 import { AgentRunManager } from "@/server/agent/manager";
 import { MockDiagnosticLLMProvider } from "@/server/diagnostics/llm";
-import { harness, settle, type Harness } from "../helpers/live-exec";
+import { harness, settle, TEAM, type Harness } from "../helpers/live-exec";
 import { mockSvc } from "../helpers/scenario-runner";
 import { resetAll } from "../helpers/live";
 
@@ -146,6 +146,46 @@ describe("live routes — the whole journey over HTTP (fake transport only)", ()
     assertNoCanary(JSON.stringify([view, body]));
     const stranger = createSession();
     expect((await api.op(p.operationId, `liara_agent_session=${stranger.id}`)).status).toBe(404);
+  });
+  it("data minimisation: no response carries ownerHash / actorHash / the raw team id — only the coarse teamScope", async () => {
+    const { h, api } = await setup();
+    const bodies: string[] = [];
+    const keep = async (r: Response) => { const t = await r.text(); bodies.push(t); return JSON.parse(t); };
+    const view = await keep(await api.propose());
+    const p = view.proposal;
+    expect(p.teamScope).toBe("team");
+    await keep(await api.decide(p.id, { decision: "approve", digest: p.digest, confirmAppName: p.appName, acknowledgeFinancial: true }));
+    await keep(await api.execute(p.id));
+    let op = await keep(await api.op(p.operationId));
+    for (let i = 0; i < 200 && !["DEPLOYED", "FAILED", "NEEDS_OPERATOR_REVIEW"].includes(op.state); i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      op = await keep(await api.op(p.operationId));
+    }
+    await keep(await api.status(h.runId));
+    expect(op.teamScope).toBe("team");
+    const all = bodies.join("\n");
+    for (const key of ["ownerHash", "actorHash", "teamId"]) expect(all, key).not.toContain(`"${key}"`);
+    expect(all).not.toContain(TEAM);
+    expect(all).not.toMatch(/"(?:owner|actor)_?hash"/i);
+  });
+  it("the offline preview has its own per-session budget, charged before the body is read; other kinds and other sessions are unaffected", async () => {
+    const { h, hdr } = await setup();
+    let pulls = 0;
+    const streamBody = () => new ReadableStream<Uint8Array>({ pull(c) { pulls++; c.enqueue(new Uint8Array(h.zip)); c.close(); } }, { highWaterMark: 0 }); // highWaterMark 0: pull() runs only when something actually reads
+    const preview = (extra: Record<string, string> = {}, cookieHdr = hdr()) =>
+      proposals.POST(new Request(`${ORIGIN}/api/agent/live/proposals`, { method: "POST", headers: { ...cookieHdr, "content-type": "application/zip", "x-live-kind": "preview_existing_app", "x-live-run": h.runId, "x-live-app": "liara-agent-demo", ...extra }, body: streamBody(), duplex: "half" } as RequestInit));
+    for (let i = 0; i < 12; i++) expect((await preview()).status, `preview ${i + 1}`).not.toBe(429);
+    const pullsBefore = pulls;
+    const limited = await preview();
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect((await j(limited)).error.code).toBe("rate_limited");
+    expect(pulls, "the rejected request's body was never read").toBe(pullsBefore);
+    // a different live kind on the same session is not charged to the preview budget
+    expect((await proposals.POST(new Request(`${ORIGIN}/api/agent/live/proposals`, { method: "POST", headers: hdr({ "content-type": "application/zip", "x-live-run": h.runId, "x-live-plan": "g2-small", "x-live-app": "liara-agent-demo" }), body: new Uint8Array(h.zip) }))).status).not.toBe(429);
+    // another session has its own budget
+    const other = createSession();
+    expect((await preview({}, { cookie: `liara_agent_session=${other.id}`, origin: ORIGIN })).status).not.toBe(429);
   });
   it("a wrong typed name over HTTP is 400 and executes nothing", async () => {
     const { api, h } = await setup();

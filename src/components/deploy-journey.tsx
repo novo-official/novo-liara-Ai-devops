@@ -5,6 +5,7 @@ import { CheckCircle2, CircleDashed, FileArchive, FlaskConical, Info, ListChecks
 import { ApprovalCard } from "@/components/approval-card";
 import { useArtifactBinding } from "@/components/artifact-binding";
 import { LiveDeploymentPanel } from "@/components/live-deployment";
+import type { LiveResultView } from "@/lib/live-result";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { deployUi, zipReasonFa } from "@/i18n/deploy-fa";
@@ -57,16 +58,36 @@ export function UploadCard({ conversationId, onUploaded, compact = false }: { co
   }
 
   return (
-    <section aria-labelledby={`up-h-${compact ? "c" : "m"}`} className="rounded-xl border p-4" data-testid="deploy-upload">
-      <h2 id={`up-h-${compact ? "c" : "m"}`} className="flex items-center gap-2 font-semibold"><FileArchive className="size-4 text-primary" aria-hidden />{compact ? "بارگذاری نسخهٔ جدید پروژه" : u.title}</h2>
-      {!compact && <p className="mt-1 text-xs leading-6 text-muted-foreground">{u.intro}</p>}
-      <div className="mt-3 flex flex-col gap-2">
-        <label htmlFor={`zip-${compact ? "c" : "m"}`} className="text-sm font-medium">{u.upload.label}</label>
-        <input ref={input} id={`zip-${compact ? "c" : "m"}`} type="file" accept=".zip,application/zip" data-testid="deploy-file" aria-describedby={`zip-hint-${compact ? "c" : "m"}`} className="block w-full rounded-lg border border-input bg-background p-2 text-sm file:me-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-2" />
-        <p id={`zip-hint-${compact ? "c" : "m"}`} className="text-xs text-muted-foreground">{u.upload.hint}</p>
-        {error && <p role="alert" data-testid="deploy-upload-error" className="text-sm text-destructive">{error}</p>}
-        <Button className="min-h-11 px-4 sm:w-fit" disabled={busy} onClick={() => void upload()} data-testid="deploy-upload-btn"><Upload aria-hidden />{busy ? u.upload.busy : u.upload.button}</Button>
-        <p className="text-xs text-muted-foreground">{u.upload.notExecuted}</p>
+    <section aria-labelledby={`up-h-${compact ? "c" : "m"}`} className="rounded-2xl border border-border/80 bg-card/60 backdrop-blur-md p-4 sm:p-5 shadow-xs" data-testid="deploy-upload">
+      <h2 id={`up-h-${compact ? "c" : "m"}`} className="flex items-center gap-2 font-bold text-sm sm:text-base text-foreground">
+        <span className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
+          <FileArchive className="size-4" aria-hidden />
+        </span>
+        <span>{compact ? "بارگذاری نسخهٔ جدید پروژه" : u.title}</span>
+      </h2>
+      {!compact && <p className="mt-1.5 text-xs leading-6 text-muted-foreground">{u.intro}</p>}
+      <div className="mt-4 flex flex-col gap-3">
+        <label htmlFor={`zip-${compact ? "c" : "m"}`} className="text-xs font-semibold text-muted-foreground">{u.upload.label}</label>
+        <div className="group relative rounded-xl border-2 border-dashed border-border/70 hover:border-primary/50 bg-muted/15 hover:bg-muted/30 p-4 transition-all duration-200">
+          <input
+            ref={input}
+            id={`zip-${compact ? "c" : "m"}`}
+            type="file"
+            accept=".zip,application/zip"
+            data-testid="deploy-file"
+            aria-describedby={`zip-hint-${compact ? "c" : "m"}`}
+            className="block w-full text-xs text-muted-foreground file:me-4 file:rounded-xl file:border file:border-primary/20 file:bg-primary/10 file:px-4 file:py-2 file:text-xs file:font-semibold file:text-primary file:transition-colors hover:file:bg-primary hover:file:text-primary-foreground cursor-pointer focus:outline-none"
+          />
+        </div>
+        <p id={`zip-hint-${compact ? "c" : "m"}`} className="text-xs text-muted-foreground/80">{u.upload.hint}</p>
+        {error && <p role="alert" data-testid="deploy-upload-error" className="text-xs font-medium text-destructive">{error}</p>}
+        <div className="flex flex-wrap items-center gap-3 pt-1">
+          <Button className="min-h-11 px-5 text-xs sm:text-sm font-semibold sm:w-fit shadow-xs" disabled={busy} onClick={() => void upload()} data-testid="deploy-upload-btn">
+            <Upload className="size-4 me-1.5" aria-hidden />
+            {busy ? u.upload.busy : u.upload.button}
+          </Button>
+          <span className="text-xs text-muted-foreground/80">{u.upload.notExecuted}</span>
+        </div>
       </div>
     </section>
   );
@@ -286,6 +307,9 @@ export function DeploymentPanel({ run, proposals, onChanged, initialFile = null 
   const d = run.deployment!;
   const r = d.readiness;
   const artifact = useArtifactBinding(d.project.artifactDigest32, initialFile);
+  // results confirmed by a recovery action stay here, above the tab panels that mount/unmount the live panel, so switching tabs never hides them
+  const [confirmed, setConfirmed] = useState<LiveResultView[]>([]);
+  const onResolved = (r: LiveResultView) => setConfirmed((prev) => [r, ...prev.filter((x) => x.operationId !== r.operationId)]);
   const pending = proposals.find((p) => p.proposal.status === "PENDING");
   const last = proposals.at(-1);
   const simulated = proposals.find((p) => p.result);
@@ -373,11 +397,11 @@ export function DeploymentPanel({ run, proposals, onChanged, initialFile = null 
       {liveEligible ? (
         <>
           <div role="tabpanel" id="path-panel-existing" aria-labelledby="path-tab-existing" hidden={active !== "existing"} data-testid="path-panel-existing">
-            {active === "existing" && <LiveDeploymentPanel runId={run.id} defaultApp="" readiness={{ verdict: r.verdict, frameworkFa: r.framework.nameFa }} artifact={artifact} section="existing" />}
+            {active === "existing" && <LiveDeploymentPanel runId={run.id} defaultApp="" readiness={{ verdict: r.verdict, frameworkFa: r.framework.nameFa }} artifact={artifact} section="existing" confirmed={confirmed} onResolved={onResolved} />}
           </div>
           <div role="tabpanel" id="path-panel-simulation" aria-labelledby="path-tab-simulation" hidden={active !== "simulation"} data-testid="path-panel-simulation">{simulation}</div>
           <div role="tabpanel" id="path-panel-new" aria-labelledby="path-tab-new" hidden={active !== "new"} data-testid="path-panel-new">
-            {active === "new" && <LiveDeploymentPanel runId={run.id} defaultApp="" readiness={{ verdict: r.verdict, frameworkFa: r.framework.nameFa }} artifact={artifact} section="new" />}
+            {active === "new" && <LiveDeploymentPanel runId={run.id} defaultApp="" readiness={{ verdict: r.verdict, frameworkFa: r.framework.nameFa }} artifact={artifact} section="new" confirmed={confirmed} onResolved={onResolved} />}
           </div>
         </>
       ) : simulation}

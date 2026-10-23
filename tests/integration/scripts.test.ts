@@ -171,3 +171,31 @@ describe("npm run preflight:liara (arguments, dry run — no network paths)", ()
     expect(run("preflight-liara.ts", ["--app=shop-api"], {}).code).toBe(3);
   });
 });
+
+describe("npm run ai:smoke (never sends a request in these tests)", () => {
+  const KEY = "box-ai-FAKEKEY0000000000000000000000000000000000000000";
+  it("without the real-AI opt-ins it is BLOCKED (exit 3) and says no request was sent", () => {
+    const r = run("ai-smoke.ts", ["--approve-live-ai-request"]);
+    expect(r.code).toBe(3);
+    expect(r.out).toMatch(/No request was sent/);
+  });
+  it("opted in but without a key or model it is BLOCKED (exit 3), even with the approval flag, and never prints the key", () => {
+    const a = run("ai-smoke.ts", ["--approve-live-ai-request"], { AI_PROVIDER: "boxapi", AI_LIVE_REQUESTS_ENABLED: "true", BOXAPI_MODEL: "some-model" });
+    expect(a.code).toBe(3);
+    expect(a.out).toMatch(/missing api_key/);
+    const b = run("ai-smoke.ts", ["--approve-live-ai-request"], { AI_PROVIDER: "boxapi", AI_LIVE_REQUESTS_ENABLED: "true", BOXAPI_API_KEY: KEY });
+    expect(b.code).toBe(3);
+    expect(b.out).toMatch(/missing model/);
+    expect(a.out + b.out).not.toContain(KEY);
+  });
+  it("fully configured but WITHOUT --approve-live-ai-request it is a dry run (exit 0, no request) and hides the key", () => {
+    const r = run("ai-smoke.ts", [], { AI_PROVIDER: "boxapi", AI_LIVE_REQUESTS_ENABLED: "true", BOXAPI_API_KEY: KEY, BOXAPI_MODEL: "some-model" });
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/DRY RUN/);
+    expect(r.out).toMatch(/No request was sent/);
+    expect(r.out).not.toContain(KEY);
+  });
+  it("a bad base URL is a configuration error (exit 2)", () => {
+    expect(run("ai-smoke.ts", [], { AI_PROVIDER: "boxapi", AI_LIVE_REQUESTS_ENABLED: "true", BOXAPI_BASE_URL: "https://evil.example/v1" }).code).toBe(2);
+  });
+});

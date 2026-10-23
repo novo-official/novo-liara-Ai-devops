@@ -20,6 +20,7 @@
     "verify:liara-readonly": "tsx --conditions=react-server scripts/verify-liara-readonly.ts",
     "preflight:liara": "tsx --conditions=react-server scripts/preflight-liara.ts",
     "check:live-settings": "tsx --conditions=react-server scripts/check-live-settings.ts",
+    "ai:smoke": "tsx --conditions=react-server scripts/ai-smoke.ts",
     "demo:zip": "tsx scripts/make-demo-zip.ts"
   },
   "dependencies": {
